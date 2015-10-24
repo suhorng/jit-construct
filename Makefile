@@ -1,14 +1,15 @@
+CC = gcc
 BIN = interpreter \
-      compiler-x86 compiler-x64 compiler-arm \
-      jit-x64 jit-arm
+      compiler-x86 \
+      jit-x86
 
 CROSS_COMPILE = arm-linux-gnueabihf-
 QEMU_ARM = qemu-arm -L /usr/arm-linux-gnueabihf
-LUA = lua
+LUA = ./minilua
 
 all: $(BIN)
 
-CFLAGS = -Wall -Werror -std=gnu99 -I.
+CFLAGS = -Wall -Werror -std=gnu99 -I. -g
 
 interpreter: interpreter.c
 	$(CC) $(CFLAGS) -o $@ $^
@@ -27,26 +28,18 @@ run-compiler: compiler-x86 compiler-x64 compiler-arm
 	$(CC) -m32 -o hello-x86 hello.s
 	@echo 'x86: ' `./hello-x86`
 	@echo
-	./compiler-x64 progs/hello.b > hello.s
-	$(CC) -o hello-x64 hello.s
-	@echo 'x64: ' `./hello-x64`
-	@echo
-	./compiler-arm progs/hello.b > hello.s
-	$(CROSS_COMPILE)gcc -o hello-arm hello.s
-	@echo 'arm: ' `$(QEMU_ARM) hello-arm`
-	@echo
 
 jit0-x64: tests/jit0-x64.c
 	$(CC) $(CFLAGS) -o $@ $^
 
-jit-x64: dynasm-driver.c jit-x64.h
-	$(CC) $(CFLAGS) -o $@ -DJIT=\"jit-x64.h\" \
+jit-x86: dynasm-driver.c jit-x86.h
+	$(CC) $(CFLAGS) -o $@ -DJIT=\"jit-x86.h\" \
 		dynasm-driver.c
-jit-x64.h: jit-x64.dasc
-	        $(LUA) dynasm/dynasm.lua -o $@ jit-x64.dasc
-run-jit-x64: jit-x64
-	./jit-x64 progs/hello.b && objdump -D -b binary \
-		-mi386 -Mx86-64 /tmp/jitcode
+jit-x86.h: jit-x86.dasc
+	        $(LUA) dynasm/dynasm.lua -o $@ jit-x86.dasc
+run-jit-x86: jit-x86
+	./jit-x86 progs/hello.b && objdump -D -b binary \
+		-mi386 -Mx86 jitcode
 
 jit0-arm: tests/jit0-arm.c
 	$(CROSS_COMPILE)gcc $(CFLAGS) -o $@ $^
@@ -60,7 +53,7 @@ run-jit-arm: jit-arm
 	$(QEMU_ARM) jit-arm progs/hello.b && \
 	$(CROSS_COMPILE)objdump -D -b binary -marm /tmp/jitcode
 
-bench-jit-x64: jit-x64
+bench-jit-x86: jit-x85
 	@echo
 	@echo Executing Brainf*ck benchmark suite. Be patient.
 	@echo
