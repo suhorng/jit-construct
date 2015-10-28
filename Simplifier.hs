@@ -51,12 +51,12 @@ interp n = interp' (new n) 0 where
     then interp' mem ptr (loop ++ bs) inp
     else interp' mem ptr rest inp
 
-data Expr = Let String Comp Expr
-          | Load String Operand Expr
-          | Store String Operand Expr
-          | While String String Expr Expr
-          | GetChar String Expr
-          | PutChar String Expr
+data Expr = Let Int Comp Expr
+          | Load Int Operand Expr
+          | Store Int Operand Expr
+          | While Int Int Expr Expr
+          | GetChar Int Expr
+          | PutChar Int Expr
           | Stop
           deriving (Generic)
 
@@ -64,7 +64,7 @@ data Comp = Add Operand Operand
           | Mul Operand Operand
           deriving (Show, Generic)
 
-data Operand = Var String
+data Operand = Var Int
              | Imm Int
              deriving (Show, Generic)
 
@@ -73,34 +73,34 @@ instance Out Expr
 instance Out Comp
 instance Out Operand
 
+printCode :: Expr -> String
 printCode = printCode' "  "
-printCode' tab (Let x c e) = tab ++ "Let " ++ x ++ " = " ++ printComp c ++ "\n" ++ printCode' tab e
-printCode' tab (Load x op e) = tab ++ "Load " ++ x ++ " <- [" ++ printOp op ++ "]\n" ++ printCode' tab e
-printCode' tab (Store x op e) = tab ++ "Store [" ++ x ++ "] <- " ++ printOp op ++ "\n" ++ printCode' tab e
-printCode' tab (While x1 x2 e e') = tab ++ "While [" ++ x1 ++ "," ++ x2 ++ "]:\n" ++ printCode' ("  " ++ tab) e ++ printCode' tab e'
-printCode' tab (GetChar x e) = tab ++ "GetChar &" ++ x ++ "\n" ++ printCode' tab e
-printCode' tab (PutChar x e) = tab ++ "PutChar [" ++ x ++ "]\n" ++ printCode' tab e
+printCode' tab (Let x c e) = tab ++ "Let %" ++ show x ++ " = " ++ printComp c ++ "\n" ++ printCode' tab e
+printCode' tab (Load x op e) = tab ++ "Load %" ++ show x ++ " <- [" ++ printOp op ++ "]\n" ++ printCode' tab e
+printCode' tab (Store x op e) = tab ++ "Store [%" ++ show x ++ "] <- " ++ printOp op ++ "\n" ++ printCode' tab e
+printCode' tab (While x1 x2 e e') = tab ++ "While [%" ++ show x1 ++ ",%" ++ show x2 ++ "]:\n" ++ printCode' ("  " ++ tab) e ++ printCode' tab e'
+printCode' tab (GetChar x e) = tab ++ "GetChar &%" ++ show x ++ "\n" ++ printCode' tab e
+printCode' tab (PutChar x e) = tab ++ "PutChar [%" ++ show x ++ "]\n" ++ printCode' tab e
 printCode' tab Stop = tab ++ "Stop\n"
 
 printComp (Add e1 e2) = printOp e1 ++ " + " ++ printOp e2
 printComp (Mul e1 e2) = printOp e1 ++ " * " ++ printOp e2
 
-printOp (Var x) = x
+printOp (Var x) = '%':show x
 printOp (Imm n)
   | n < 0     = "(" ++ show n ++ ")"
   | otherwise = show n
 
-maxExpr (Let x c e)      = max (fromName x) (maxExpr e)
-maxExpr (Load x op e)    = max (fromName x) (maxExpr e)
+maxExpr :: Expr -> Int
+maxExpr (Let x c e)      = max x (maxExpr e)
+maxExpr (Load x op e)    = max x (maxExpr e)
 maxExpr (Store x op e)   = maxExpr e
 maxExpr (While x1 x2 e1 e2) = max (maxExpr e1) (maxExpr e2)
 maxExpr (GetChar op e)   = maxExpr e
 maxExpr (PutChar op e)   = maxExpr e
 maxExpr Stop             = 1
 
-fromName :: String -> Int
-fromName = read . dropWhile (`notElem` ['0'..'9'])
-
+construct :: Int -> Brainfsck -> (Expr, Int)
 construct ptr []            = (Stop, ptr)
 construct ptr (GETC:bs)     = first (GetChar ptr) (construct ptr bs)
 construct ptr (PUTC:bs)     = first (PutChar ptr) (construct ptr bs)
@@ -124,8 +124,6 @@ construct ptr (op:bs)       = (expr'', ptr'') where
                     Store ptr (Var tmp2) $
                     expr'
   (expr', ptr'') = construct ptr' bs
-  (tmp, ptr') = if op == INCP || op == DECP
-                then ('p':show fresh, tmp)
-                else ('m':show fresh, ptr)
-  tmp2 = 'x':show (1 + fresh)
-  fresh = 1 + maxExpr expr'
+  ptr' = if op == INCP || op == DECP then tmp else ptr
+  tmp = 2 + maxExpr expr'
+  tmp2 = 2 + tmp
