@@ -52,8 +52,8 @@ interp n = interp' (new n) 0 where
     else interp' mem ptr rest inp
 
 data Expr = Let Int Comp Expr
-          | Load Int Operand Expr
-          | Store Int Operand Expr
+          | Load Operand Operand Expr
+          | Store Operand Operand Expr
           | While Int Int Expr Expr
           | GetChar Int Expr
           | PutChar Int Expr
@@ -76,8 +76,8 @@ instance Out Operand
 printCode :: Expr -> String
 printCode = printCode' "  "
 printCode' tab (Let x c e) = tab ++ "Let %" ++ show x ++ " = " ++ printComp c ++ "\n" ++ printCode' tab e
-printCode' tab (Load x op e) = tab ++ "Load %" ++ show x ++ " <- [" ++ printOp op ++ "]\n" ++ printCode' tab e
-printCode' tab (Store x op e) = tab ++ "Store [%" ++ show x ++ "] <- " ++ printOp op ++ "\n" ++ printCode' tab e
+printCode' tab (Load x op e) = tab ++ "Load " ++ printOp x ++ " <- [" ++ printOp op ++ "]\n" ++ printCode' tab e
+printCode' tab (Store x op e) = tab ++ "Store [" ++ printOp x ++ "] <- " ++ printOp op ++ "\n" ++ printCode' tab e
 printCode' tab (While x1 x2 e e') = tab ++ "While [%" ++ show x1 ++ ",%" ++ show x2 ++ "]:\n" ++ printCode' ("  " ++ tab) e ++ printCode' tab e'
 printCode' tab (GetChar x e) = tab ++ "GetChar &%" ++ show x ++ "\n" ++ printCode' tab e
 printCode' tab (PutChar x e) = tab ++ "PutChar [%" ++ show x ++ "]\n" ++ printCode' tab e
@@ -93,12 +93,16 @@ printOp (Imm n)
 
 maxExpr :: Expr -> Int
 maxExpr (Let x c e)      = max x (maxExpr e)
-maxExpr (Load x op e)    = max x (maxExpr e)
+maxExpr (Load x op e)    = max (maxOp x) (maxExpr e)
 maxExpr (Store x op e)   = maxExpr e
 maxExpr (While x1 x2 e1 e2) = max (maxExpr e1) (maxExpr e2)
 maxExpr (GetChar op e)   = maxExpr e
 maxExpr (PutChar op e)   = maxExpr e
 maxExpr Stop             = 1
+
+maxOp :: Operand -> Int
+maxOp (Var x) = x
+maxOp (Imm _) = minBound
 
 construct :: Int -> Brainfsck -> (Expr, Int)
 construct ptr []            = (Stop, ptr)
@@ -114,14 +118,14 @@ construct ptr (op:bs)       = (expr'', ptr'') where
             DECP -> Let tmp (Add (Var ptr) (Imm (-1))) $
                     expr'
 
-            INCM -> Load tmp (Var ptr) $
+            INCM -> Load (Var tmp) (Var ptr) $
                     Let tmp2 (Add (Var tmp) (Imm 1)) $
-                    Store ptr (Var tmp2) $
+                    Store (Var ptr) (Var tmp2) $
                     expr'
 
-            DECM -> Load tmp (Var ptr) $
+            DECM -> Load (Var tmp) (Var ptr) $
                     Let tmp2 (Add (Var tmp) (Imm (-1))) $
-                    Store ptr (Var tmp2) $
+                    Store (Var ptr) (Var tmp2) $
                     expr'
   (expr', ptr'') = construct ptr' bs
   ptr' = if op == INCP || op == DECP then tmp else ptr
