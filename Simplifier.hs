@@ -131,3 +131,61 @@ construct ptr (op:bs)       = (expr'', ptr'') where
   ptr' = if op == INCP || op == DECP then tmp else ptr
   tmp = 2 + maxExpr expr'
   tmp2 = 2 + tmp
+
+{- Try to use finally-tagless some day? -}
+
+data PExpr = PVar Int
+           | PImm Int
+           | PAdd Int Int -- var + imm
+           | PMul Int Int -- var * imm
+
+peval :: Expr -> Expr
+peval (Let x c@(Add (Var y) (Imm 0)) e) = Let x c (peval (psubst e (PVar y) x))
+peval (Let x c@(Add (Var y) (Imm n)) e) = Let x c (peval (psubst e (PAdd y n) x))
+peval (Let x c@(Mul (Var y) (Imm n)) e) = Let x c (peval (psubst e (PMul y n) x))
+peval (Load x op e) = Load x op (peval e)
+peval (Store x op e) = Store x op (peval e)
+peval (While x1 x2 e1 e2) = While x1 x2' e1' (psubst (peval e2) (PVar x2') x2) where
+  e1' = peval e1
+  x2' = getBinding e1' x2
+  getBinding (Let y c e) x
+    | y == x, Add (Var z) (Imm 0) <- c = z
+    | otherwise = getBinding e x
+  getBinding (Load y op e) x
+    | Var z <- y, z == x = x
+    | otherwise = getBinding e x
+  getBinding (Store _ _ e) x = getBinding e x
+  getBinding (While x1 x2 e1 e2) x
+    | x2 == x = x
+    | otherwise = getBinding e2 x
+  getBinding (GetChar y e) x
+    | y == x = x
+    | otherwise = getBinding e x
+  getBinding (PutChar _ e) x = getBinding e x
+  getBinding Stop x = x
+peval (GetChar x e) = GetChar x (peval e)
+peval (PutChar x e) = PutChar x (peval e)
+peval Stop = Stop
+
+-- e1 [ e2 / x ] is written as psubst e1 e2 x
+psubst :: Expr -> PExpr -> Int -> Expr
+psubst (Let y (Add (Var x') (Imm n)) e1) e2@(PAdd z m) x
+  | x == x' = Let y (Add (Var z) (Imm (n+m))) (psubst e1 e2 x)
+psubst (Let y (Add op1 op2) e1) e2 x = Let y (Add (psubstOp op1 e2 x) (psubstOp op2 e2 x)) (psubst e1 e2 x)
+psubst (Let y (Mul op1 op2) e1) e2 x = Let y (Mul (psubstOp op1 e2 x) (psubstOp op2 e2 x)) (psubst e1 e2 x)
+psubst (Load y op e1) e2 x = Load (psubstOp y e2 x) (psubstOp op e2 x) (psubst e1 e2 x)
+psubst (Store y op e1) e2 x = Store (psubstOp y e2 x) (psubstOp op e2 x) (psubst e1 e2 x)
+psubst (While x1 x2 e1 e1') e2 x = While x1' x2 (psubst e1 e2 x) (psubst e1' e2 x) where
+  x1' = case e2 of
+          PVar y | x1 == x -> y
+          _ -> x1
+psubst (GetChar y e1) e2 x = GetChar y (psubst e1 e2 x)
+psubst (PutChar y e1) e2 x = PutChar y (psubst e1 e2 x)
+psubst Stop _ _ = Stop
+
+psubstOp (Var y) (PVar z) x | y == x = Var z
+psubstOp (Var y) (PImm n) x | y == x = Imm n
+psubstOp op e2 x = op
+
+test :: String -> IO ()
+test = (print . peval . fst . construct 99999 . parse =<<) . readFile
