@@ -98,8 +98,8 @@ maxExpr (Let x c e)      = max x (maxExpr e)
 maxExpr (Load x op e)    = max x (maxExpr e)
 maxExpr (Store x op e)   = maxExpr e
 maxExpr (While x1 x2 e1 e2) = max (maxExpr e1) (maxExpr e2)
-maxExpr (GetChar op e)   = maxExpr e
-maxExpr (PutChar op e)   = maxExpr e
+maxExpr (GetChar x e)    = maxExpr e
+maxExpr (PutChar x e)    = maxExpr e
 maxExpr Stop             = 1
 
 maxOp :: Operand -> Int
@@ -164,9 +164,7 @@ peval (While x1 x2 e1 e2) = While x1 x2' e1' (psubst (peval e2) (PVar x2') x2) w
   getBinding (While x1 x2 e1 e2) x
     | x2 == x = x
     | otherwise = getBinding e2 x
-  getBinding (GetChar y e) x
-    | y == x = x
-    | otherwise = getBinding e x
+  getBinding (GetChar _ e) x = getBinding e x
   getBinding (PutChar _ e) x = getBinding e x
   getBinding Stop x = x
 peval (GetChar x e) = GetChar x (peval e)
@@ -185,8 +183,12 @@ psubst (While x1 x2 e1 e1') e2 x = While x1' x2 (psubst e1 e2 x) (psubst e1' e2 
   x1' = case e2 of
           PVar y | x1 == x -> y
           _ -> x1
-psubst (GetChar y e1) e2 x = GetChar y (psubst e1 e2 x)
-psubst (PutChar y e1) e2 x = PutChar y (psubst e1 e2 x)
+psubst (GetChar y e1) e2 x
+  | y == x, PVar z <- e2 = GetChar z (psubst e1 e2 x)
+  | otherwise = GetChar y (psubst e1 e2 x)
+psubst (PutChar y e1) e2 x
+  | y == x, PVar z <- e2 = PutChar z (psubst e1 e2 x)
+  | otherwise = PutChar y (psubst e1 e2 x)
 psubst Stop _ _ = Stop
 
 psubstOp (Var y) (PVar z) x | y == x = Var z
