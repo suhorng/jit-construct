@@ -2,7 +2,9 @@
 
 module Simplifier where
 
-import Control.Arrow (first)
+import Control.Arrow (first, second)
+import Control.Monad.State
+import Control.Applicative ((<$>), Applicative(..))
 import Data.Char (chr, ord)
 import Data.Word
 
@@ -79,7 +81,7 @@ printCode' tab (Let x c e) = tab ++ "Let %" ++ show x ++ " = " ++ printComp c ++
 printCode' tab (Load x op e) = tab ++ "Load %" ++ show x ++ " <- [" ++ printOp op ++ "]\n" ++ printCode' tab e
 printCode' tab (Store x op e) = tab ++ "Store [" ++ printOp x ++ "] <- " ++ printOp op ++ "\n" ++ printCode' tab e
 printCode' tab (While x1 x2 e e') = tab ++ "While [%" ++ show x1 ++ ",%" ++ show x2 ++ "]:\n" ++ printCode' ("  " ++ tab) e ++ printCode' tab e'
-printCode' tab (GetChar x e) = tab ++ "GetChar &%" ++ show x ++ "\n" ++ printCode' tab e
+printCode' tab (GetChar x e) = tab ++ "GetChar [%" ++ show x ++ "]\n" ++ printCode' tab e
 printCode' tab (PutChar x e) = tab ++ "PutChar [%" ++ show x ++ "]\n" ++ printCode' tab e
 printCode' tab Stop = tab ++ "Stop\n"
 
@@ -104,33 +106,37 @@ maxOp :: Operand -> Int
 maxOp (Var x) = x
 maxOp (Imm _) = minBound
 
-construct :: Int -> Brainfsck -> (Expr, Int)
-construct ptr []            = (Stop, ptr)
-construct ptr (GETC:bs)     = first (GetChar ptr) (construct ptr bs)
-construct ptr (PUTC:bs)     = first (PutChar ptr) (construct ptr bs)
-construct ptr (LOOP bs:bs') = first (While ptr ptr' expr') (construct ptr' bs') where
-  (expr', ptr') = construct ptr bs
-construct ptr (op:bs)       = (expr'', ptr'') where
-  expr'' = case op of
-            INCP -> Let tmp (Add (Var ptr) (Imm 1)) $
-                    expr'
+construct :: Int -> Brainfsck -> Expr
+construct ptr0 prog = evalState (construct' prog) (ptr0, ptr0 + 2)
 
-            DECP -> Let tmp (Add (Var ptr) (Imm (-1))) $
-                    expr'
+construct' :: (Applicative m, MonadState (Int, Int) m) => Brainfsck -> m Expr
+construct' []            = pure Stop
+construct' (GETC:bs)     = GetChar . fst <$> get <*> construct' bs
+construct' (PUTC:bs)     = PutChar . fst <$> get <*> construct' bs
+construct' (LOOP bs:bs') = do
+  ptr <- fst <$> get
+  expr' <- construct' bs
+  While ptr . fst <$> get <*> pure expr' <*> construct' bs'
+construct' (op:bs)       = do
+  (ptr, tmp) <- get
+  let tmp2 = tmp + 2
+  modify . second $ if op == INCP || op == DECP then (+2) else (+4)
+  case op of
+    INCP -> Let tmp (Add (Var ptr) (Imm 1)) <$>
+            (modify (first (const tmp)) *> construct' bs)
 
-            INCM -> Load tmp (Var ptr) $
-                    Let tmp2 (Add (Var tmp) (Imm 1)) $
-                    Store (Var ptr) (Var tmp2) $
-                    expr'
+    DECP -> Let tmp (Add (Var ptr) (Imm (-1))) <$>
+            (modify (first (const tmp)) *> construct' bs)
 
-            DECM -> Load tmp (Var ptr) $
-                    Let tmp2 (Add (Var tmp) (Imm (-1))) $
-                    Store (Var ptr) (Var tmp2) $
-                    expr'
-  (expr', ptr'') = construct ptr' bs
-  ptr' = if op == INCP || op == DECP then tmp else ptr
-  tmp = 2 + maxExpr expr'
-  tmp2 = 2 + tmp
+    INCM -> Load tmp (Var ptr) .
+            Let tmp2 (Add (Var tmp) (Imm 1)) .
+            Store (Var ptr) (Var tmp2) <$>
+            construct' bs
+
+    DECM -> Load tmp (Var ptr) .
+            Let tmp2 (Add (Var tmp) (Imm (-1))) .
+            Store (Var ptr) (Var tmp2) <$>
+            construct' bs
 
 {- Try to use finally-tagless some day? -}
 
@@ -188,4 +194,4 @@ psubstOp (Var y) (PImm n) x | y == x = Imm n
 psubstOp op e2 x = op
 
 test :: String -> IO ()
-test = (print . peval . fst . construct 99999 . parse =<<) . readFile
+test = (print . peval . construct 0 . parse =<<) . readFile
