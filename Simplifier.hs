@@ -171,6 +171,68 @@ peval (GetChar x e) = GetChar x (peval e)
 peval (PutChar x e) = PutChar x (peval e)
 peval Stop = Stop
 
+{-
+  get x >>= put x    = return ()            -- not implemented
+  put x v >> get x   = put x v >> return v
+  put x _ >> put x v = put x v
+
+  A more general approach would be using SSA construction
+  algorithm as in the `mem2reg` pass of LLVM.
+-}
+
+memeval :: Expr -> Expr
+memeval (Let x c e) = Let x c (memeval e)
+memeval (Load x op e) = Load x op (memeval e)
+memeval (Store x op e) = doStoreX (memeval (putGet e x op)) where
+  doStoreX e =
+    case x of
+      Var x' | putPut e x' -> e
+      _ -> Store x op e
+
+  putGet :: Expr -> Operand -> Operand -> Expr
+  putGet (Let y c e) x v = Let y c (putGet e x v)
+  putGet (Load y op e) x v
+    | op == x, Var _ <- v = Let y (Add v (Imm 0)) (putGet e x v)
+    | op == x, Imm _ <- v = Let y (Add v (Imm 0)) (putGet e x v)
+    -- note: created unhandled pattern `Imm + Imm` here
+  putGet (Load y op e) x v = Load y op (putGet e x v)
+  putGet e@(Store _ _ _) x v = e
+  putGet e@(While _ _ _ _) x v = e
+  putGet e@(GetChar _ _) x v = e
+  putGet (PutChar y e) x v = PutChar y (putGet e x v)
+  putGet Stop x v = Stop
+
+  {-
+    putPut e x returns True only if there is another write operation
+    to x before any possible load from x.
+
+    - put/get case should have been eliminated (hence `False` in `Load`)
+      Further work: Load could possible be skipped if we can prove that
+      y /= x. For example, `y = z + a` while `x = z + b`
+
+    - Another possible improvement: there is a write to x in e2 while
+      no read from x in e1
+  -}
+  putPut :: Expr -> Int -> Bool
+  putPut (Let y c e) x = putPut e x
+  putPut (Load y _ _) x = False
+  putPut (Store op _ e) x
+    | Var y <- op, y == x = True
+    | otherwise = putPut e x
+  putPut (While _ _ e1 e2) x = False
+  putPut (GetChar y e) x
+    | y == x = True
+    | otherwise = putPut e x
+  putPut (PutChar _ _) x = False
+  putPut Stop x = False
+
+  injOp (Var x) = PVar x
+  injOp (Imm n) = PImm n
+memeval (While x1 x2 e1 e2) = While x1 x2 (memeval e1) (memeval e2)
+memeval (GetChar x e) = GetChar x (memeval e)
+memeval (PutChar x e) = PutChar x (memeval e)
+memeval Stop = Stop
+
 -- e1 [ e2 / x ] is written as psubst e1 e2 x
 psubst :: Expr -> PExpr -> Int -> Expr
 psubst (Let y (Add (Var x') (Imm n)) e1) e2@(PAdd z m) x
@@ -196,4 +258,4 @@ psubstOp (Var y) (PImm n) x | y == x = Imm n
 psubstOp op e2 x = op
 
 test :: String -> IO ()
-test = (print . peval . construct 0 . parse =<<) . readFile
+test = (print . peval . memeval . peval . construct 0 . parse =<<) . readFile
