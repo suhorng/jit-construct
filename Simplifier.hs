@@ -52,7 +52,7 @@ interp n = interp' (new n) 0 where
     else interp' mem ptr rest inp
 
 data Expr = Let Int Comp Expr
-          | Load Operand Operand Expr
+          | Load Int Operand Expr
           | Store Operand Operand Expr
           | While Int Int Expr Expr
           | GetChar Int Expr
@@ -66,7 +66,7 @@ data Comp = Add Operand Operand
 
 data Operand = Var Int
              | Imm Int
-             deriving (Show, Generic)
+             deriving (Show, Eq, Generic)
 
 instance Show Expr where show = printCode
 instance Out Expr
@@ -76,7 +76,7 @@ instance Out Operand
 printCode :: Expr -> String
 printCode = printCode' "  "
 printCode' tab (Let x c e) = tab ++ "Let %" ++ show x ++ " = " ++ printComp c ++ "\n" ++ printCode' tab e
-printCode' tab (Load x op e) = tab ++ "Load " ++ printOp x ++ " <- [" ++ printOp op ++ "]\n" ++ printCode' tab e
+printCode' tab (Load x op e) = tab ++ "Load %" ++ show x ++ " <- [" ++ printOp op ++ "]\n" ++ printCode' tab e
 printCode' tab (Store x op e) = tab ++ "Store [" ++ printOp x ++ "] <- " ++ printOp op ++ "\n" ++ printCode' tab e
 printCode' tab (While x1 x2 e e') = tab ++ "While [%" ++ show x1 ++ ",%" ++ show x2 ++ "]:\n" ++ printCode' ("  " ++ tab) e ++ printCode' tab e'
 printCode' tab (GetChar x e) = tab ++ "GetChar &%" ++ show x ++ "\n" ++ printCode' tab e
@@ -93,7 +93,7 @@ printOp (Imm n)
 
 maxExpr :: Expr -> Int
 maxExpr (Let x c e)      = max x (maxExpr e)
-maxExpr (Load x op e)    = max (maxOp x) (maxExpr e)
+maxExpr (Load x op e)    = max x (maxExpr e)
 maxExpr (Store x op e)   = maxExpr e
 maxExpr (While x1 x2 e1 e2) = max (maxExpr e1) (maxExpr e2)
 maxExpr (GetChar op e)   = maxExpr e
@@ -118,12 +118,12 @@ construct ptr (op:bs)       = (expr'', ptr'') where
             DECP -> Let tmp (Add (Var ptr) (Imm (-1))) $
                     expr'
 
-            INCM -> Load (Var tmp) (Var ptr) $
+            INCM -> Load tmp (Var ptr) $
                     Let tmp2 (Add (Var tmp) (Imm 1)) $
                     Store (Var ptr) (Var tmp2) $
                     expr'
 
-            DECM -> Load (Var tmp) (Var ptr) $
+            DECM -> Load tmp (Var ptr) $
                     Let tmp2 (Add (Var tmp) (Imm (-1))) $
                     Store (Var ptr) (Var tmp2) $
                     expr'
@@ -152,7 +152,7 @@ peval (While x1 x2 e1 e2) = While x1 x2' e1' (psubst (peval e2) (PVar x2') x2) w
     | y == x, Add (Var z) (Imm 0) <- c = z
     | otherwise = getBinding e x
   getBinding (Load y op e) x
-    | Var z <- y, z == x = x
+    | y == x = x
     | otherwise = getBinding e x
   getBinding (Store _ _ e) x = getBinding e x
   getBinding (While x1 x2 e1 e2) x
@@ -173,7 +173,7 @@ psubst (Let y (Add (Var x') (Imm n)) e1) e2@(PAdd z m) x
   | x == x' = Let y (Add (Var z) (Imm (n+m))) (psubst e1 e2 x)
 psubst (Let y (Add op1 op2) e1) e2 x = Let y (Add (psubstOp op1 e2 x) (psubstOp op2 e2 x)) (psubst e1 e2 x)
 psubst (Let y (Mul op1 op2) e1) e2 x = Let y (Mul (psubstOp op1 e2 x) (psubstOp op2 e2 x)) (psubst e1 e2 x)
-psubst (Load y op e1) e2 x = Load (psubstOp y e2 x) (psubstOp op e2 x) (psubst e1 e2 x)
+psubst (Load y op e1) e2 x = Load y (psubstOp op e2 x) (psubst e1 e2 x)
 psubst (Store y op e1) e2 x = Store (psubstOp y e2 x) (psubstOp op e2 x) (psubst e1 e2 x)
 psubst (While x1 x2 e1 e1') e2 x = While x1' x2 (psubst e1 e2 x) (psubst e1' e2 x) where
   x1' = case e2 of
