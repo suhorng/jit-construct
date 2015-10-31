@@ -56,7 +56,7 @@ interp n = interp' (new n) 0 where
 data Expr = Let Int Comp Expr
           | Load Int Operand Expr
           | Store Operand Operand Expr
-          | While Int Int Expr Expr
+          | While Int (Int, Int) Expr Expr
           | GetChar Int Expr
           | PutChar Int Expr
           | Stop
@@ -80,7 +80,7 @@ printCode = printCode' "  "
 printCode' tab (Let x c e) = tab ++ "Let %" ++ show x ++ " = " ++ printComp c ++ "\n" ++ printCode' tab e
 printCode' tab (Load x op e) = tab ++ "Load %" ++ show x ++ " <- [" ++ printOp op ++ "]\n" ++ printCode' tab e
 printCode' tab (Store x op e) = tab ++ "Store [" ++ printOp x ++ "] <- " ++ printOp op ++ "\n" ++ printCode' tab e
-printCode' tab (While x1 x2 e e') = tab ++ "While [%" ++ show x1 ++ ",%" ++ show x2 ++ "]:\n" ++ printCode' ("  " ++ tab) e ++ printCode' tab e'
+printCode' tab (While x (x1, x2) e e') = tab ++ "While %" ++ show x ++ "=[%" ++ show x1 ++ ",%" ++ show x2 ++ "]:\n" ++ printCode' ("  " ++ tab) e ++ printCode' tab e'
 printCode' tab (GetChar x e) = tab ++ "GetChar [%" ++ show x ++ "]\n" ++ printCode' tab e
 printCode' tab (PutChar x e) = tab ++ "PutChar [%" ++ show x ++ "]\n" ++ printCode' tab e
 printCode' tab Stop = tab ++ "Stop\n"
@@ -97,7 +97,7 @@ maxExpr :: Expr -> Int
 maxExpr (Let x c e)      = max x (maxExpr e)
 maxExpr (Load x op e)    = max x (maxExpr e)
 maxExpr (Store x op e)   = maxExpr e
-maxExpr (While x1 x2 e1 e2) = max (maxExpr e1) (maxExpr e2)
+maxExpr (While x (x1, x2) e1 e2) = max (maxExpr e1) (maxExpr e2)
 maxExpr (GetChar x e)    = maxExpr e
 maxExpr (PutChar x e)    = maxExpr e
 maxExpr Stop             = 1
@@ -114,9 +114,12 @@ construct' []            = pure Stop
 construct' (GETC:bs)     = GetChar . fst <$> get <*> construct' bs
 construct' (PUTC:bs)     = PutChar . fst <$> get <*> construct' bs
 construct' (LOOP bs:bs') = do
-  ptr <- fst <$> get
+  (ptr, tmp) <- get
+  modify (const (tmp, tmp+2))
   expr' <- construct' bs
-  While ptr . fst <$> get <*> pure expr' <*> construct' bs'
+  ptr' <- fst <$> get
+  modify (first (const tmp))
+  While tmp (ptr, ptr') expr' <$> construct' bs'
 construct' (op:bs)       = do
   (ptr, tmp) <- get
   let tmp2 = tmp + 2
@@ -151,7 +154,7 @@ peval (Let x c@(Add (Var y) (Imm n)) e) = Let x c (peval (psubst e (PAdd y n) x)
 peval (Let x c@(Mul (Var y) (Imm n)) e) = Let x c (peval (psubst e (PMul y n) x))
 peval (Load x op e) = Load x op (peval e)
 peval (Store x op e) = Store x op (peval e)
-peval (While x1 x2 e1 e2) = While x1 x2' e1' (psubst (peval e2) (PVar x2') x2) where
+peval (While x (x1, x2) e1 e2) = While x (x1, x2') e1' (psubst (peval e2) (PVar x2') x2) where
   e1' = peval e1
   x2' = getBinding e1' x2
   getBinding (Let y c e) x
@@ -161,8 +164,8 @@ peval (While x1 x2 e1 e2) = While x1 x2' e1' (psubst (peval e2) (PVar x2') x2) w
     | y == x = x
     | otherwise = getBinding e x
   getBinding (Store _ _ e) x = getBinding e x
-  getBinding (While x1 x2 e1 e2) x
-    | x2 == x = x
+  getBinding (While y (x1, x2) e1 e2) x
+    | y == x = x
     | otherwise = getBinding e2 x
   getBinding (GetChar _ e) x = getBinding e x
   getBinding (PutChar _ e) x = getBinding e x
@@ -228,7 +231,7 @@ memeval (Store x op e) = doStoreX (memeval (putGet e x op)) where
 
   injOp (Var x) = PVar x
   injOp (Imm n) = PImm n
-memeval (While x1 x2 e1 e2) = While x1 x2 (memeval e1) (memeval e2)
+memeval (While y xs e1 e2) = While y xs (memeval e1) (memeval e2)
 memeval (GetChar x e) = GetChar x (memeval e)
 memeval (PutChar x e) = PutChar x (memeval e)
 memeval Stop = Stop
@@ -243,7 +246,7 @@ bindeval' loopptr (Let x c e) = doLetX (bindeval' loopptr e) where
 bindeval' loopptr (Load x op e) = doLoadX (bindeval' loopptr e) where
   doLoadX e = if x == loopptr || bindused e x then Load x op e else e
 bindeval' loopptr (Store x op e) = Store x op (bindeval' loopptr e)
-bindeval' loopptr (While x1 x2 e1 e2) = While x1 x2 (bindeval' x2 e1) (bindeval' loopptr e2)
+bindeval' loopptr (While y (x1, x2) e1 e2) = While y (x1, x2) (bindeval' x2 e1) (bindeval' loopptr e2)
 bindeval' loopptr (GetChar x e) = GetChar x (bindeval' loopptr e)
 bindeval' loopptr (PutChar x e) = PutChar x (bindeval' loopptr e)
 bindeval' loopptr Stop = Stop
@@ -253,7 +256,7 @@ bindused (Let y (Add op1 op2) e) x = bindInOp op1 x || bindInOp op2 x || binduse
 bindused (Let y (Mul op1 op2) e) x = bindInOp op1 x || bindInOp op2 x || bindused e x
 bindused (Load y op e) x = y == x || bindInOp op x || bindused e x
 bindused (Store y op e) x = bindInOp y x || bindInOp op x || bindused e x
-bindused (While x1 x2 e1 e2) x = x1 == x || x2 == x || bindused e1 x || bindused e2 x
+bindused (While y (x1, x2) e1 e2) x = x1 == x || bindused e1 x || bindused e2 x
 bindused (GetChar y e) x = y == x || bindused e x
 bindused (PutChar y e) x = y == x || bindused e x
 bindused Stop x = False
@@ -269,7 +272,7 @@ psubst (Let y (Add op1 op2) e1) e2 x = Let y (Add (psubstOp op1 e2 x) (psubstOp 
 psubst (Let y (Mul op1 op2) e1) e2 x = Let y (Mul (psubstOp op1 e2 x) (psubstOp op2 e2 x)) (psubst e1 e2 x)
 psubst (Load y op e1) e2 x = Load y (psubstOp op e2 x) (psubst e1 e2 x)
 psubst (Store y op e1) e2 x = Store (psubstOp y e2 x) (psubstOp op e2 x) (psubst e1 e2 x)
-psubst (While x1 x2 e1 e1') e2 x = While x1' x2 (psubst e1 e2 x) (psubst e1' e2 x) where
+psubst (While y (x1, x2) e1 e1') e2 x = While y (x1', x2') (psubst e1 e2 x) (psubst e1' e2 x) where
   x1' = case e2 of
           PVar y | x1 == x -> y
           _ -> x1
