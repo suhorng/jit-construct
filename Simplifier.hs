@@ -141,12 +141,12 @@ peval (Let x c@(Add (Var y) (Imm n)) e) = Let x c (peval (psubst e (PAdd y n) x)
 peval (Let x c@(Mul (Var y) (Imm n)) e) = Let x c (peval (psubst e (PMul y n) x))
 peval (Load x op e) = Load x op (peval e)
 peval (Store x op e) = Store x op (peval e)
-peval (While x (x1, x2) e1 e2) = doWhileXs (psubst (peval e2) (PVar x2'') x2) where
+peval (While x (x1, x2) e1 e2) = doWhileXs (peval e2) where
   e1' = peval e1
   x2' = getBinding e1' x2
-  (x2'', doWhileXs)
-    | x == x2' = (x, While x (x1, x1) (psubst e1' (PVar x1) x2' ))
-    | otherwise = (x2', While x (x1, x2') e1')
+  doWhileXs
+    | x == x2'  = While x (x1, x1) (psubst e1' (PVar x1) x)
+    | otherwise = While x (x1, x2') e1'
   getBinding (Let y c e) x
     | y == x, Add (Var z) (Imm 0) <- c = z
     | otherwise = getBinding e x
