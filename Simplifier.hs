@@ -276,6 +276,9 @@ psubst (While y (x1, x2) e1 e1') e2 x = While y (x1', x2') (psubst e1 e2 x) (psu
   x1' = case e2 of
           PVar y | x1 == x -> y
           _ -> x1
+  x2' = case e2 of
+          PVar y | x2 == x -> y
+          _ -> x2
 psubst (GetChar y e1) e2 x
   | y == x, PVar z <- e2 = GetChar z (psubst e1 e2 x)
   | otherwise = GetChar y (psubst e1 e2 x)
