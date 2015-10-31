@@ -233,6 +233,34 @@ memeval (GetChar x e) = GetChar x (memeval e)
 memeval (PutChar x e) = PutChar x (memeval e)
 memeval Stop = Stop
 
+-- Drop unused bindings
+bindeval :: Expr -> Expr
+bindeval = bindeval' 0
+
+bindeval' :: Int -> Expr -> Expr
+bindeval' loopptr (Let x c e) = doLetX (bindeval' loopptr e) where
+  doLetX e = if bindused e x then Let x c e else e
+bindeval' loopptr (Load x op e) = doLoadX (bindeval' loopptr e) where
+  doLoadX e = if bindused e x then Load x op e else e
+bindeval' loopptr (Store x op e) = Store x op (bindeval' loopptr e)
+bindeval' loopptr (While x1 x2 e1 e2) = While x1 x2 (bindeval' x2 e1) (bindeval' loopptr e2)
+bindeval' loopptr (GetChar x e) = GetChar x (bindeval' loopptr e)
+bindeval' loopptr (PutChar x e) = PutChar x (bindeval' loopptr e)
+bindeval' loopptr Stop = Stop
+
+bindused :: Expr -> Int -> Bool
+bindused (Let y (Add op1 op2) e) x = bindInOp op1 x || bindInOp op2 x || bindused e x
+bindused (Let y (Mul op1 op2) e) x = bindInOp op1 x || bindInOp op2 x || bindused e x
+bindused (Load y op e) x = y == x || bindInOp op x || bindused e x
+bindused (Store y op e) x = bindInOp y x || bindInOp op x || bindused e x
+bindused (While x1 x2 e1 e2) x = x1 == x || x2 == x || bindused e1 x || bindused e2 x
+bindused (GetChar y e) x = y == x || bindused e x
+bindused (PutChar y e) x = y == x || bindused e x
+bindused Stop x = False
+
+bindInOp (Var y) x = y == x
+bindInOp (Imm _) x = False
+
 -- e1 [ e2 / x ] is written as psubst e1 e2 x
 psubst :: Expr -> PExpr -> Int -> Expr
 psubst (Let y (Add (Var x') (Imm n)) e1) e2@(PAdd z m) x
@@ -258,4 +286,4 @@ psubstOp (Var y) (PImm n) x | y == x = Imm n
 psubstOp op e2 x = op
 
 test :: String -> IO ()
-test = (print . peval . memeval . peval . construct 0 . parse =<<) . readFile
+test = (print . bindeval . peval . memeval . peval . construct 0 . parse =<<) . readFile
