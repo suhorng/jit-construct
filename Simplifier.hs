@@ -93,19 +93,6 @@ printOp (Imm n)
   | n < 0     = "(" ++ show n ++ ")"
   | otherwise = show n
 
-maxExpr :: Expr -> Int
-maxExpr (Let x c e)      = max x (maxExpr e)
-maxExpr (Load x op e)    = max x (maxExpr e)
-maxExpr (Store x op e)   = maxExpr e
-maxExpr (While x (x1, x2) e1 e2) = max (maxExpr e1) (maxExpr e2)
-maxExpr (GetChar x e)    = maxExpr e
-maxExpr (PutChar x e)    = maxExpr e
-maxExpr Stop             = 1
-
-maxOp :: Operand -> Int
-maxOp (Var x) = x
-maxOp (Imm _) = minBound
-
 construct :: Int -> Brainfsck -> Expr
 construct ptr0 prog = evalState (construct' prog) (ptr0, ptr0 + 2)
 
