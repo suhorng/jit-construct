@@ -239,9 +239,9 @@ bindeval = bindeval' 0
 
 bindeval' :: Int -> Expr -> Expr
 bindeval' loopptr (Let x c e) = doLetX (bindeval' loopptr e) where
-  doLetX e = if bindused e x then Let x c e else e
+  doLetX e = if x == loopptr || bindused e x then Let x c e else e
 bindeval' loopptr (Load x op e) = doLoadX (bindeval' loopptr e) where
-  doLoadX e = if bindused e x then Load x op e else e
+  doLoadX e = if x == loopptr || bindused e x then Load x op e else e
 bindeval' loopptr (Store x op e) = Store x op (bindeval' loopptr e)
 bindeval' loopptr (While x1 x2 e1 e2) = While x1 x2 (bindeval' x2 e1) (bindeval' loopptr e2)
 bindeval' loopptr (GetChar x e) = GetChar x (bindeval' loopptr e)
