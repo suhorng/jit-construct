@@ -77,10 +77,10 @@ instance Out Operand
 
 printCode :: Expr -> String
 printCode = printCode' "  "
-printCode' tab (Let x c e) = tab ++ "Let %" ++ show x ++ " = " ++ printComp c ++ "\n" ++ printCode' tab e
-printCode' tab (Load x op e) = tab ++ "Load %" ++ show x ++ " <- [" ++ printOp op ++ "]\n" ++ printCode' tab e
-printCode' tab (Store x op e) = tab ++ "Store [" ++ printOp x ++ "] <- " ++ printOp op ++ "\n" ++ printCode' tab e
-printCode' tab (While x (x1, x2) e e') = tab ++ "While %" ++ show x ++ "=[%" ++ show x1 ++ ",%" ++ show x2 ++ "]:\n" ++ printCode' ("  " ++ tab) e ++ printCode' tab e'
+printCode' tab (Let x c e) = tab ++ "let %" ++ show x ++ " = " ++ printComp c ++ "\n" ++ printCode' tab e
+printCode' tab (Load x op e) = tab ++ "%" ++ show x ++ " <- ![" ++ printOp op ++ "]\n" ++ printCode' tab e
+printCode' tab (Store x op e) = tab ++ "[" ++ printOp x ++ "] := " ++ printOp op ++ "\n" ++ printCode' tab e
+printCode' tab (While x (x1, x2) e e') = tab ++ "While %" ++ show x ++ "=(%" ++ show x1 ++ ",%" ++ show x2 ++ "):\n" ++ printCode' ("  " ++ tab) e ++ printCode' tab e'
 printCode' tab (GetChar x e) = tab ++ "GetChar [%" ++ show x ++ "]\n" ++ printCode' tab e
 printCode' tab (PutChar x e) = tab ++ "PutChar [%" ++ show x ++ "]\n" ++ printCode' tab e
 printCode' tab Stop = tab ++ "Stop\n"
