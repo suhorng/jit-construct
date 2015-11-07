@@ -1,6 +1,6 @@
 module Main where
 
-import Simplifier (test)
+import Simplifier (test_, testTime)
 import System.Environment (getArgs)
 
-main = getArgs >>= test . head
+main = getArgs >>= testTime . head
