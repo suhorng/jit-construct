@@ -7,6 +7,7 @@ import System.IO
 
 import Control.Arrow (first, second)
 import Control.Monad.State.Strict
+import Control.Monad.Writer
 import Control.Applicative ((<$>), Applicative(..))
 import Data.Char (chr, ord)
 import Data.Word
@@ -283,6 +284,137 @@ psubst Stop _ _ = Stop
 psubstOp (Var y) (PVar z) x | y == x = Var z
 psubstOp (Var y) (PImm n) x | y == x = Imm n
 psubstOp op e2 x = op
+
+data Codegen0State = C0 { nextLabel :: !Int
+                        , currPtrReg :: String
+                        , currPtrRegNo :: !Int
+                        , varRegs :: Int -> String }
+
+regRings = cycle ["esi", "edi", "ebx", "ecx"]
+
+label  lbl   = tell ["L" ++ show lbl ++ ":"]
+add    a   n = tell ["  add " ++ a ++ ", (" ++ show n ++ ")"]
+call   lbl   = tell ["  call " ++ lbl]
+jmp    lbl   = tell ["  jmp L" ++ show lbl]
+jz     lbl   = tell ["  jz L" ++ show lbl]
+leaAdd a b n = tell ["  lea " ++ a ++ ", [" ++ b ++ "+(" ++ show n ++ ")]"]
+mov    a b   = when (a /= b) $ tell ["  mov " ++ a ++ ", " ++ b]
+movsxb a b   = tell ["  movsx " ++ a ++ ", byte " ++ b]
+push   a     = tell ["  push " ++ a]
+pop    a     = tell ["  pop " ++ a]
+test   a b   = tell ["  test " ++ a ++ ", " ++ b]
+
+{-
+  specialized code gen:
+    pointer -> in esi, edi, ebx, ecx
+    address calculation -> in edx
+    value calculation -> in eax
+-}
+
+genX86bf e = concat $ map (++ "\n") . execWriter . evalStateT genCode $ initSt where
+  genCode = do
+    tell ["global _main",
+          "global _rt_getchar",
+          "global _rt_putchar",
+          "extern _getchar",
+          "extern _putchar",
+
+          "[section .text]",
+          "_rt_getchar:",
+          "  sub esp, 12",
+          "  mov [esp], eax   ; save registers",
+          "  mov [esp+4], ecx ; save registers",
+          "  mov [esp+8], edx ; save registers",
+          "  call _getchar",
+          "  mov edx, [esp+16]",
+          "  mov [edx], al",
+          "  mov eax, [esp]",
+          "  mov ecx, [esp+4]",
+          "  mov edx, [esp+8]",
+          "  add esp, 12",
+          "  ret 4",
+
+          "_rt_putchar:",
+          "  sub esp, 16",
+          "  mov [esp+4], eax  ; save registers",
+          "  mov [esp+8], ecx  ; save registers",
+          "  mov [esp+12], edx ; save registers",
+          "  mov edx, [esp+20]",
+          "  movzx eax, byte [edx]",
+          "  mov [esp], eax",
+          "  call _putchar",
+          "  mov eax, [esp+4]",
+          "  mov ecx, [esp+8]",
+          "  mov edx, [esp+12]",
+          "  add esp, 16",
+          "  ret 4",
+
+          "_main:",
+          "  push edi",
+          "  push esi",
+          "  push ebx",
+          "  push ebp",
+          "  mov ebp, esp",
+          "  sub esp, 8192",
+          "  cld",
+          "  xor eax, eax",
+          "  mov ecx, 8192/4",
+          "  mov edi, esp",
+          "  rep stosd",
+          "  lea " ++ regRings!!0 ++ ", [esp + 4096]" ]
+    genX86bf' e
+    tell ["  leave",
+          "  pop ebx",
+          "  pop esi",
+          "  pop edi",
+          "  ret"]
+  initSt = C0 1 (regRings!!0) 0 cxt0
+  cxt0 x = if x == 0 then regRings!!0 else error ("Unbound variable %" ++ show x)
+
+genX86bf' :: (MonadState Codegen0State m, MonadWriter [String] m) => Expr -> m ()
+genX86bf' e0@(Let x (Add (Var y) (Imm n)) e) = genWrap e $ \currSt -> do
+  resReg <- case varRegs currSt y of
+    "eax" -> add "eax" n >> return "eax"
+    _ -> leaAdd "edx" (varRegs currSt y) n >> return "edx"
+  modify $ \st -> st { varRegs = \z -> if z == x then resReg else varRegs currSt z }
+genX86bf' (Load x (Var y) e) = genWrap e $ \currSt -> do
+  movsxb "eax" ("[" ++ varRegs currSt y ++ "]")
+  modify $ \st -> st { varRegs = \z -> if z == x then "eax" else varRegs currSt z }
+genX86bf' (Store (Var x) (Var y) e) = genWrap e $ \currSt -> do
+  mov ("[" ++ varRegs currSt x ++ "]") "al"
+genX86bf' (While x1 (x2, x3) e1 e2) = genWrap e2 $ \currSt -> do
+  let l1 = nextLabel currSt
+      l2 = nextLabel currSt + 1
+  modify $ \st -> st { nextLabel = nextLabel st + 2 }
+  let prevPtrReg = varRegs currSt x2
+      nextPtrReg = currPtrReg currSt
+      ptrReg = regRings!!(currPtrRegNo currSt + 1)
+  modify $ \st -> st { varRegs = \z -> if z == x1 || (x2 == x3 && z == x2) then ptrReg else varRegs currSt z }
+  when (currPtrRegNo currSt >= 3) $ push ptrReg
+  modify $ \st -> st { currPtrReg = ptrReg }
+  modify $ \st -> st { currPtrRegNo = currPtrRegNo st + 1 }
+  mov ptrReg prevPtrReg
+  label l1
+  movsxb "eax" ("[" ++ ptrReg ++ "]")
+  test "al" "al"
+  jz l2
+  genX86bf' e1
+  when (x2 /= x3) $ mov nextPtrReg (varRegs currSt x3)
+  jmp l1
+  label l2
+  modify $ \st -> st { currPtrRegNo = currPtrRegNo st - 1 }
+  modify $ \st -> st { varRegs = \z -> if z == x1 then nextPtrReg else varRegs currSt z }
+  when (x2 /= x3) $ mov nextPtrReg ptrReg
+  when (currPtrRegNo currSt >= 3) $ pop ptrReg
+genX86bf' (GetChar x e) = genWrap e $ \currSt -> do
+  push (varRegs currSt x)
+  call "_rt_getchar"
+genX86bf' (PutChar x e) = genWrap e $ \currSt -> do
+  push (varRegs currSt x)
+  call "_rt_putchar"
+genX86bf' Stop = return ()
+
+genWrap e f = (get >>= f) >> genX86bf' e
 
 test_ :: String -> IO ()
 test_ = (print . bindeval . peval . memeval . peval . construct 0 . parse =<<) . readFile
