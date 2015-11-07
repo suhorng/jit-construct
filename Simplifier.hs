@@ -406,7 +406,7 @@ genX86bf' (While x1 (x2, x3) e1 e2) = genWrap e2 $ \currSt -> do
   jz l2
   genX86bf' e1
   currSt' <- get
-  when (x2 /= x3) $ mov nextPtrReg (varRegs currSt' x3)
+  when (x2 /= x3) $ mov ptrReg (varRegs currSt' x3)
   jmp l1
   label l2
   modify $ \st -> st { currPtrRegNo = currPtrRegNo st - 1 }
