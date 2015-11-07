@@ -1,9 +1,9 @@
-{-# LANGUAGE FlexibleContexts, DeriveGeneric #-}
+{-# LANGUAGE FlexibleContexts, DeriveGeneric, BangPatterns #-}
 
 module Simplifier where
 
 import Control.Arrow (first, second)
-import Control.Monad.State
+import Control.Monad.State.Strict
 import Control.Applicative ((<$>), Applicative(..))
 import Data.Char (chr, ord)
 import Data.Word
@@ -53,21 +53,21 @@ interp n = interp' (new n) 0 where
     then interp' mem ptr (loop ++ bs) inp
     else interp' mem ptr rest inp
 
-data Expr = Let Int Comp Expr
-          | Load Int Operand Expr
-          | Store Operand Operand Expr
-          | While Int (Int, Int) Expr Expr
-          | GetChar Int Expr
-          | PutChar Int Expr
+data Expr = Let !Int !Comp !Expr
+          | Load !Int Operand !Expr
+          | Store !Operand !Operand !Expr
+          | While !Int (Int, Int) !Expr !Expr
+          | GetChar !Int !Expr
+          | PutChar !Int !Expr
           | Stop
           deriving (Generic)
 
-data Comp = Add Operand Operand
-          | Mul Operand Operand
+data Comp = Add !Operand !Operand
+          | Mul !Operand !Operand
           deriving (Show, Generic)
 
-data Operand = Var Int
-             | Imm Int
+data Operand = Var !Int
+             | Imm !Int
              deriving (Show, Eq, Generic)
 
 instance Show Expr where show = printCode
