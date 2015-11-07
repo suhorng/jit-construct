@@ -372,6 +372,12 @@ genX86bf e = concat $ map (++ "\n") . execWriter . evalStateT genCode $ initSt w
   cxt0 x = if x == 0 then regRings!!0 else error ("Unbound variable %" ++ show x)
 
 genX86bf' :: (MonadState Codegen0State m, MonadWriter [String] m) => Expr -> m ()
+genX86bf' (Let x (Add (Var z) (Imm n))
+          (Store (Var y) (Var x')
+        e@(PutChar y' _)))
+  | x == x' && y == y' = genWrap e $ \currSt -> do
+    mov ("[" ++ varRegs currSt y ++ "]") "al"
+    add ("byte [" ++ varRegs currSt y ++ "]") n
 genX86bf' e0@(Let x (Add (Var y) (Imm n)) e) = genWrap e $ \currSt -> do
   resReg <- case varRegs currSt y of
     "eax" -> add "eax" n >> return "eax"
