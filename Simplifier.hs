@@ -87,7 +87,7 @@ printCode' tab (Store x op e) = tab ++ "[" ++ printOp x ++ "] := " ++ printOp op
 printCode' tab (While x (x1, x2) e e') = tab ++ "While %" ++ show x ++ "=(%" ++ show x1 ++ ",%" ++ show x2 ++ "):\n" ++ printCode' ("  " ++ tab) e ++ printCode' tab e'
 printCode' tab (GetChar x e) = tab ++ "GetChar [%" ++ show x ++ "]\n" ++ printCode' tab e
 printCode' tab (PutChar x e) = tab ++ "PutChar [%" ++ show x ++ "]\n" ++ printCode' tab e
-printCode' tab Stop = tab ++ "Stop\n"
+printCode' tab Stop = ""
 
 printComp (Add e1 e2) = printOp e1 ++ " + " ++ printOp e2
 printComp (Mul e1 e2) = printOp e1 ++ " * " ++ printOp e2
@@ -293,6 +293,8 @@ data Codegen0State = C0 { nextLabel :: !Int
 regRings = cycle ["esi", "edi", "ebx", "ecx"]
 
 label  lbl   = tell ["L" ++ show lbl ++ ":"]
+comment s    = tell ["; " ++ dropWhile (== ' ') (filter (/= '\n') s)]
+
 add    a   n = tell ["  add " ++ a ++ ", (" ++ show n ++ ")"]
 call   lbl   = tell ["  call " ++ lbl]
 jmp    lbl   = tell ["  jmp L" ++ show lbl]
@@ -317,7 +319,7 @@ genX86bf e = concat $ map (++ "\n") . execWriter . evalStateT genCode $ initSt w
           "global _rt_getchar",
           "global _rt_putchar",
           "extern _getchar",
-          "extern _putchar",
+          "extern _putchar\n",
 
           "[section .text]",
           "_rt_getchar:",
@@ -332,7 +334,7 @@ genX86bf e = concat $ map (++ "\n") . execWriter . evalStateT genCode $ initSt w
           "  mov ecx, [esp+4]",
           "  mov edx, [esp+8]",
           "  add esp, 12",
-          "  ret 4",
+          "  ret 4\n",
 
           "_rt_putchar:",
           "  sub esp, 16",
@@ -347,7 +349,7 @@ genX86bf e = concat $ map (++ "\n") . execWriter . evalStateT genCode $ initSt w
           "  mov ecx, [esp+8]",
           "  mov edx, [esp+12]",
           "  add esp, 16",
-          "  ret 4",
+          "  ret 4\n",
 
           "_main:",
           "  push edi",
@@ -361,7 +363,7 @@ genX86bf e = concat $ map (++ "\n") . execWriter . evalStateT genCode $ initSt w
           "  mov ecx, 8192/4",
           "  mov edi, esp",
           "  rep stosd",
-          "  lea " ++ regRings!!0 ++ ", [esp + 4096]" ]
+          "  lea " ++ regRings!!0 ++ ", [esp + 4096]\n" ]
     genX86bf' e
     tell ["  leave",
           "  pop ebx",
@@ -376,19 +378,24 @@ genX86bf' (Let x (Add (Var z) (Imm n))
           (Store (Var y) (Var x')
         e@(PutChar y' _)))
   | x == x' && y == y' = genWrap e $ \currSt -> do
+    comment . show $ Let x (Add (Var z) (Imm n)) (Store (Var y) (Var x') Stop)
     mov ("[" ++ varRegs currSt y ++ "]") "al"
     add ("byte [" ++ varRegs currSt y ++ "]") n
-genX86bf' e0@(Let x (Add (Var y) (Imm n)) e) = genWrap e $ \currSt -> do
+genX86bf' (Let x (Add (Var y) (Imm n)) e) = genWrap e $ \currSt -> do
+  comment . show $ Let x (Add (Var y) (Imm n)) Stop
   resReg <- case varRegs currSt y of
     "eax" -> add "eax" n >> return "eax"
     _ -> leaAdd "edx" (varRegs currSt y) n >> return "edx"
   modify $ \st -> st { varRegs = \z -> if z == x then resReg else varRegs currSt z }
 genX86bf' (Load x (Var y) e) = genWrap e $ \currSt -> do
+  comment . show $ Load x (Var y) Stop
   movsxb "eax" ("[" ++ varRegs currSt y ++ "]")
   modify $ \st -> st { varRegs = \z -> if z == x then "eax" else varRegs currSt z }
 genX86bf' (Store (Var x) (Var y) e) = genWrap e $ \currSt -> do
+  comment . show $ Store (Var x) (Var y) Stop
   mov ("[" ++ varRegs currSt x ++ "]") "al"
 genX86bf' (While x1 (x2, x3) e1 e2) = genWrap e2 $ \currSt -> do
+  comment . show $ While x1 (x2, x3) Stop Stop
   let l1 = nextLabel currSt
       l2 = nextLabel currSt + 1
   modify $ \st -> st { nextLabel = nextLabel st + 2 }
@@ -414,9 +421,11 @@ genX86bf' (While x1 (x2, x3) e1 e2) = genWrap e2 $ \currSt -> do
   when (x2 /= x3) $ mov nextPtrReg ptrReg
   when (currPtrRegNo currSt >= 3) $ pop ptrReg
 genX86bf' (GetChar x e) = genWrap e $ \currSt -> do
+  comment . show $ GetChar x Stop
   push (varRegs currSt x)
   call "_rt_getchar"
 genX86bf' (PutChar x e) = genWrap e $ \currSt -> do
+  comment . show $ PutChar x Stop
   push (varRegs currSt x)
   call "_rt_putchar"
 genX86bf' Stop = return ()
