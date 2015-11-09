@@ -7,6 +7,7 @@ import System.IO
 
 import Control.Arrow (first, second)
 import Control.Monad.State.Strict
+import Control.Monad.Writer
 import Control.Applicative ((<$>), Applicative(..))
 import Data.Char (chr, ord)
 import Data.Word
@@ -283,6 +284,81 @@ psubst Stop _ _ = Stop
 psubstOp (Var y) (PVar z) x | y == x = Var z
 psubstOp (Var y) (PImm n) x | y == x = Imm n
 psubstOp op e2 x = op
+
+label  lbl   = tell ["L" ++ show lbl ++ ":"]
+add    a   n = tell ["  add " ++ a ++ ", (" ++ show n ++ ")"]
+call   lbl   = tell ["  call " ++ lbl]
+jmp    lbl   = tell ["  jmp L" ++ show lbl]
+jz     lbl   = tell ["  jz L" ++ show lbl]
+leaAdd a b n = tell ["  lea " ++ a ++ ", [" ++ b ++ "+(" ++ show n ++ ")]"]
+mov    a b   = when (a /= b) $ tell ["  mov " ++ a ++ ", " ++ b]
+movsxb a b   = tell ["  movsx " ++ a ++ ", byte " ++ b]
+push   a     = tell ["  push " ++ a]
+pop    a     = tell ["  pop " ++ a]
+test   a b   = tell ["  test " ++ a ++ ", " ++ b]
+
+genX86bf e = concat $ map (++ "\n") . execWriter . evalStateT genCode $ 0 where
+  genCode = do
+    tell ["global _main",
+          "global _rt_getchar",
+          "global _rt_putchar",
+          "extern _getchar",
+          "extern _putchar",
+
+          "[section .text]",
+          "_rt_getchar:",
+          "  sub esp, 12",
+          "  mov [esp], eax   ; save registers",
+          "  mov [esp+4], ecx ; save registers",
+          "  mov [esp+8], edx ; save registers",
+          "  call _getchar",
+          "  mov edx, [esp+16]",
+          "  mov [edx], al",
+          "  mov eax, [esp]",
+          "  mov ecx, [esp+4]",
+          "  mov edx, [esp+8]",
+          "  add esp, 12",
+          "  ret 4",
+
+          "_rt_putchar:",
+          "  sub esp, 16",
+          "  mov [esp+4], eax  ; save registers",
+          "  mov [esp+8], ecx  ; save registers",
+          "  mov [esp+12], edx ; save registers",
+          "  mov edx, [esp+20]",
+          "  movzx eax, byte [edx]",
+          "  mov [esp], eax",
+          "  call _putchar",
+          "  mov eax, [esp+4]",
+          "  mov ecx, [esp+8]",
+          "  mov edx, [esp+12]",
+          "  add esp, 16",
+          "  ret 4",
+
+          "_main:",
+          "  push edi",
+          "  push esi",
+          "  push ebx",
+          "  push ebp",
+          "  mov ebp, esp",
+          "  sub esp, 8192",
+          "  cld",
+          "  xor eax, eax",
+          "  mov ecx, 8192/4",
+          "  mov edi, esp",
+          "  rep stosd",
+          "  lea esi, [esp + 4096]" ]
+    genX86bf' e
+    tell ["  leave",
+          "  pop ebx",
+          "  pop esi",
+          "  pop edi",
+          "  ret"]
+
+genX86bf' :: (MonadState s m, MonadWriter [String] m) => Expr -> m ()
+genX86bf' Stop = return ()
+
+genWrap e f = (get >>= f) >> genX86bf' e
 
 test_ :: String -> IO ()
 test_ = (print . bindeval . peval . memeval . peval . construct 0 . parse =<<) . readFile
