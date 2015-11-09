@@ -295,16 +295,16 @@ regRings = cycle ["esi", "edi", "ebx", "ecx"]
 label  lbl   = tell ["L" ++ show lbl ++ ":"]
 comment s    = tell ["; " ++ dropWhile (== ' ') (filter (/= '\n') s)]
 
-add    a   n = tell ["  add " ++ a ++ ", (" ++ show n ++ ")"]
-call   lbl   = tell ["  call " ++ lbl]
-jmp    lbl   = tell ["  jmp L" ++ show lbl]
-jz     lbl   = tell ["  jz L" ++ show lbl]
-leaAdd a b n = tell ["  lea " ++ a ++ ", [" ++ b ++ "+(" ++ show n ++ ")]"]
-mov    a b   = when (a /= b) $ tell ["  mov " ++ a ++ ", " ++ b]
-movsxb a b   = tell ["  movsx " ++ a ++ ", byte " ++ b]
-push   a     = tell ["  push " ++ a]
-pop    a     = tell ["  pop " ++ a]
-test   a b   = tell ["  test " ++ a ++ ", " ++ b]
+add    a   n = tell ["        add    " ++ a ++ ", (" ++ show n ++ ")"]
+call   lbl   = tell ["        call   " ++ lbl]
+jmp    lbl   = tell ["        jmp    L" ++ show lbl]
+jz     lbl   = tell ["        jz     L" ++ show lbl]
+leaAdd a b n = tell ["        lea    " ++ a ++ ", [" ++ b ++ "+(" ++ show n ++ ")]"]
+mov    a b   = when (a /= b) $ tell ["        mov    " ++ a ++ ", " ++ b]
+movsxb a b   = tell ["        movsx  " ++ a ++ ", byte " ++ b]
+push   a     = tell ["        push   " ++ a]
+pop    a     = tell ["        pop    " ++ a]
+test   a b   = tell ["        test   " ++ a ++ ", " ++ b]
 
 {-
   specialized code gen:
@@ -323,53 +323,53 @@ genX86bf e = concat $ map (++ "\n") . execWriter . evalStateT genCode $ initSt w
 
           "[section .text]",
           "_rt_getchar:",
-          "  sub esp, 12",
-          "  mov [esp], eax   ; save registers",
-          "  mov [esp+4], ecx ; save registers",
-          "  mov [esp+8], edx ; save registers",
-          "  call _getchar",
-          "  mov edx, [esp+16]",
-          "  mov [edx], al",
-          "  mov eax, [esp]",
-          "  mov ecx, [esp+4]",
-          "  mov edx, [esp+8]",
-          "  add esp, 12",
-          "  ret 4\n",
+          "        sub    esp, 12",
+          "        mov    [esp], eax   ; save registers",
+          "        mov    [esp+4], ecx ; save registers",
+          "        mov    [esp+8], edx ; save registers",
+          "        call    _getchar",
+          "        mov    edx, [esp+16]",
+          "        mov    [edx], al",
+          "        mov    eax, [esp]",
+          "        mov    ecx, [esp+4]",
+          "        mov    edx, [esp+8]",
+          "        add    esp, 12",
+          "        ret    4\n",
 
           "_rt_putchar:",
-          "  sub esp, 16",
-          "  mov [esp+4], eax  ; save registers",
-          "  mov [esp+8], ecx  ; save registers",
-          "  mov [esp+12], edx ; save registers",
-          "  mov edx, [esp+20]",
-          "  movzx eax, byte [edx]",
-          "  mov [esp], eax",
-          "  call _putchar",
-          "  mov eax, [esp+4]",
-          "  mov ecx, [esp+8]",
-          "  mov edx, [esp+12]",
-          "  add esp, 16",
-          "  ret 4\n",
+          "        sub    esp, 16",
+          "        mov    [esp+4], eax  ; save registers",
+          "        mov    [esp+8], ecx  ; save registers",
+          "        mov    [esp+12], edx ; save registers",
+          "        mov    edx, [esp+20]",
+          "        movzx  eax, byte [edx]",
+          "        mov    [esp], eax",
+          "        call    _putchar",
+          "        mov    eax, [esp+4]",
+          "        mov    ecx, [esp+8]",
+          "        mov    edx, [esp+12]",
+          "        add    esp, 16",
+          "        ret    4\n",
 
           "_main:",
-          "  push edi",
-          "  push esi",
-          "  push ebx",
-          "  push ebp",
-          "  mov ebp, esp",
-          "  sub esp, 8192",
-          "  cld",
-          "  xor eax, eax",
-          "  mov ecx, 8192/4",
-          "  mov edi, esp",
-          "  rep stosd",
-          "  lea " ++ regRings!!0 ++ ", [esp + 4096]\n" ]
+          "        push   edi",
+          "        push   esi",
+          "        push   ebx",
+          "        push   ebp",
+          "        mov    ebp, esp",
+          "        sub    esp, 8192",
+          "        cld",
+          "        xor    eax, eax",
+          "        mov    ecx, 8192/4",
+          "        mov    edi, esp",
+          "        rep    stosd",
+          "        lea    " ++ regRings!!0 ++ ", [esp + 4096]\n" ]
     genX86bf' e
-    tell ["  leave",
-          "  pop ebx",
-          "  pop esi",
-          "  pop edi",
-          "  ret"]
+    tell ["        leave",
+          "        pop    ebx",
+          "        pop    esi",
+          "        pop    edi",
+          "        ret"]
   initSt = C0 1 (regRings!!0) 0 cxt0
   cxt0 x = if x == 0 then regRings!!0 else error ("Unbound variable %" ++ show x)
 
