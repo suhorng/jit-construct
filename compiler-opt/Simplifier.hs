@@ -2,135 +2,17 @@
 
 module Simplifier where
 
+import Utils
+import Brainfsck
+import CoreExpr
+
 import System.CPUTime
 import System.IO
 
-import Control.Arrow (first, second)
 import Control.Monad.State.Strict
 import Control.Monad.Writer
-import Control.Applicative ((<$>), Applicative(..))
-import Data.Char (chr, ord)
-import Data.Word
 
 import Text.PrettyPrint.GenericPretty
-
-data BrainfsckOp = INCP | DECP | INCM | DECM | GETC | PUTC | LOOP Brainfsck
-                 deriving (Show, Eq)
-type Brainfsck   = [BrainfsckOp]
-
-parse :: String -> Brainfsck
-parse = parse' [id] where
-  parse' [f]       []       = f []
-  parse' (f:fs)    ('>':ss) = parse' ((f . (INCP:)) : fs) ss
-  parse' (f:fs)    ('<':ss) = parse' ((f . (DECP:)) : fs) ss
-  parse' (f:fs)    ('+':ss) = parse' ((f . (INCM:)) : fs) ss
-  parse' (f:fs)    ('-':ss) = parse' ((f . (DECM:)) : fs) ss
-  parse' (f:fs)    ('.':ss) = parse' ((f . (PUTC:)) : fs) ss
-  parse' (f:fs)    (',':ss) = parse' ((f . (GETC:)) : fs) ss
-  parse' fs        ('[':ss) = parse' (id:fs) ss
-  parse' (f:f':fs) (']':ss) = parse' ((f' . (LOOP (f []):)) : fs) ss
-  parse' fs        (_:ss)   = parse' fs ss
-
-type Mem = [Word8]
-
-new    n          = replicate n 0
-deref  mem addr   = mem!!addr
-update mem addr x = prefix ++ (x:suffix) where
-  (prefix, _:suffix) = splitAt addr mem
-mmodify mem addr f = update mem addr (f (deref mem addr))
-
-interp :: Int -> Brainfsck -> String -> String
-interp n = interp' (new n) 0 where
-  ord' = fromIntegral . ord
-  chr' = chr . fromIntegral
-
-  interp' :: [Word8] -> Int -> Brainfsck -> String -> String
-  interp' mem ptr []        inp      = []
-  interp' mem ptr (INCP:bs) inp      = interp' mem (ptr+1) bs inp
-  interp' mem ptr (DECP:bs) inp      = interp' mem (ptr-1) bs inp
-  interp' mem ptr (INCM:bs) inp      = interp' (mmodify mem ptr (+1)) ptr bs inp
-  interp' mem ptr (DECM:bs) inp      = interp' (mmodify mem ptr (subtract 1)) ptr bs inp
-  interp' mem ptr (GETC:bs) (ch:inp) = interp' (update mem ptr (ord' ch)) ptr bs inp
-  interp' mem ptr (PUTC:bs) inp      = chr' (deref mem ptr) : interp' mem ptr bs inp
-  interp' mem ptr bs@(LOOP loop:rest) inp =
-    if deref mem ptr /= 0
-    then interp' mem ptr (loop ++ bs) inp
-    else interp' mem ptr rest inp
-
-data Expr = Let !Int !Comp !Expr
-          | Load !Int Operand !Expr
-          | Store !Operand !Operand !Expr
-          | While !Int (Int, Int) !Expr !Expr
-          | GetChar !Int !Expr
-          | PutChar !Int !Expr
-          | Stop
-          deriving (Generic)
-
-data Comp = Add !Operand !Operand
-          | Mul !Operand !Operand
-          deriving (Show, Generic)
-
-data Operand = Var !Int
-             | Imm !Int
-             deriving (Show, Eq, Generic)
-
-instance Show Expr where show = printCode
-instance Out Expr
-instance Out Comp
-instance Out Operand
-
-printCode :: Expr -> String
-printCode = printCode' "  "
-printCode' tab (Let x c e) = tab ++ "let %" ++ show x ++ " = " ++ printComp c ++ "\n" ++ printCode' tab e
-printCode' tab (Load x op e) = tab ++ "%" ++ show x ++ " <- ![" ++ printOp op ++ "]\n" ++ printCode' tab e
-printCode' tab (Store x op e) = tab ++ "[" ++ printOp x ++ "] := " ++ printOp op ++ "\n" ++ printCode' tab e
-printCode' tab (While x (x1, x2) e e') = tab ++ "While %" ++ show x ++ "=(%" ++ show x1 ++ ",%" ++ show x2 ++ "):\n" ++ printCode' ("  " ++ tab) e ++ printCode' tab e'
-printCode' tab (GetChar x e) = tab ++ "GetChar [%" ++ show x ++ "]\n" ++ printCode' tab e
-printCode' tab (PutChar x e) = tab ++ "PutChar [%" ++ show x ++ "]\n" ++ printCode' tab e
-printCode' tab Stop = tab ++ "Stop\n"
-
-printComp (Add e1 e2) = printOp e1 ++ " + " ++ printOp e2
-printComp (Mul e1 e2) = printOp e1 ++ " * " ++ printOp e2
-
-printOp (Var x) = '%':show x
-printOp (Imm n)
-  | n < 0     = "(" ++ show n ++ ")"
-  | otherwise = show n
-
-construct :: Int -> Brainfsck -> Expr
-construct ptr0 prog = evalState (construct' prog) (ptr0, ptr0 + 2)
-
-construct' :: (Applicative m, MonadState (Int, Int) m) => Brainfsck -> m Expr
-construct' []            = pure Stop
-construct' (GETC:bs)     = GetChar . fst <$> get <*> construct' bs
-construct' (PUTC:bs)     = PutChar . fst <$> get <*> construct' bs
-construct' (LOOP bs:bs') = do
-  (ptr, tmp) <- get
-  modify (const (tmp, tmp+2))
-  expr' <- construct' bs
-  ptr' <- fst <$> get
-  modify (first (const tmp))
-  While tmp (ptr, ptr') expr' <$> construct' bs'
-construct' (op:bs)       = do
-  (ptr, tmp) <- get
-  let tmp2 = tmp + 2
-  modify . second $ if op == INCP || op == DECP then (+2) else (+4)
-  case op of
-    INCP -> Let tmp (Add (Var ptr) (Imm 1)) <$>
-            (modify (first (const tmp)) *> construct' bs)
-
-    DECP -> Let tmp (Add (Var ptr) (Imm (-1))) <$>
-            (modify (first (const tmp)) *> construct' bs)
-
-    INCM -> Load tmp (Var ptr) .
-            Let tmp2 (Add (Var tmp) (Imm 1)) .
-            Store (Var ptr) (Var tmp2) <$>
-            construct' bs
-
-    DECM -> Load tmp (Var ptr) .
-            Let tmp2 (Add (Var tmp) (Imm (-1))) .
-            Store (Var ptr) (Var tmp2) <$>
-            construct' bs
 
 {- Try to use finally-tagless some day? -}
 
