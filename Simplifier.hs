@@ -296,6 +296,7 @@ movsxb a b   = tell ["  movsx " ++ a ++ ", byte " ++ b]
 push   a     = tell ["  push " ++ a]
 pop    a     = tell ["  pop " ++ a]
 test   a b   = tell ["  test " ++ a ++ ", " ++ b]
+ref    x     = "[" ++ x ++ "]"
 
 genX86bf e = concat $ map (++ "\n") . execWriter . evalStateT genCode $ 0 where
   genCode = do
@@ -356,9 +357,33 @@ genX86bf e = concat $ map (++ "\n") . execWriter . evalStateT genCode $ 0 where
           "  ret"]
 
 genX86bf' :: (MonadState s m, MonadWriter [String] m) => Expr -> m ()
-genX86bf' Stop = return ()
+genX86bf' = undefined
 
-genWrap e f = (get >>= f) >> genX86bf' e
+type VX86 = [VX86Inst]
+
+data VX86Inst =
+    MOV VX86Op VX86Op
+  | ADD VX86Op VX86Op
+  | LEA VX86Op VX86Op
+  | PUSH VX86Op
+  | POP VX86Op
+  | CALL String
+  | AddNew Int VX86Op VX86Op
+  | Spill Int Int -- save a virtual register to memory
+  | Cache String VX86Op -- cache a value in a register; hence can be discarded
+  | WhileNZ String VX86 -- while the content of the register is not zero
+  | Call VX86Op
+  deriving (Generic, Show)
+
+data VX86Op = Virt Int | ArgO Int | ArgI Int | Local Int
+            | Reg String  | Val Int
+            deriving (Generic, Show)
+
+instance Out VX86Inst
+instance Out VX86Op
+
+injVX86 :: Expr -> VX86
+injVX86 = undefined
 
 test_ :: String -> IO ()
 test_ = (print . bindeval . peval . memeval . peval . construct 0 . parse =<<) . readFile
