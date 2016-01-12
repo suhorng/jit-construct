@@ -94,17 +94,39 @@ data VX86Inst =
   | CALL String
   | AddNew Int VX86Op VX86Op
   | Spill Int Int -- save a virtual register to memory
-  | Cache String VX86Op -- cache a value in a register; hence can be discarded
-  | WhileNZ String VX86 -- while the content of the register is not zero
-  | Call VX86Op
+  | Cache VX86Op VX86Op -- cache a value in a register; hence can be discarded
+  | WhileNZ Int VX86 -- while the content of the register is not zero
+  | Call String VX86Op
   deriving (Generic, Show)
 
 data VX86Op = Virt Int | ArgO Int | ArgI Int | Local Int
-            | Reg String  | Val Int
+            | Reg String  | Val Int | MemImm Int | MemVirt Int
             deriving (Generic, Show)
 
 instance Out VX86Inst
 instance Out VX86Op
 
 injVX86 :: Expr -> VX86
-injVX86 = undefined
+injVX86 (Let x (Add (Var y) (Imm n)) e) = AddNew x (Virt y) (Val n):injVX86 e
+injVX86 e@(Let x c _) = error ("injVX86: Not implemented:\n" ++ printCode e)
+injVX86 (Load x (Var y) e) = Cache (Virt x) (MemVirt y):injVX86 e
+injVX86 (Load x (Imm n) e) = Cache (Virt x) (MemImm n):injVX86 e
+injVX86 (Store (Var x) (Imm m) e) = MOV (MemVirt x) (Val m):injVX86 e
+injVX86 (Store (Var x) (Var y) e) = MOV (MemVirt x) (Virt y):injVX86 e
+injVX86 (Store (Imm n) (Imm m) e) = MOV (MemImm n) (Val m):injVX86 e
+injVX86 (Store (Imm n) (Var y) e) = MOV (MemImm n) (Virt y):injVX86 e
+injVX86 (While x (x1, x2) e e')
+  | x1 == x2 =
+      WhileNZ x
+        (injVX86 e):
+      Cache (Virt x) (Virt x2):
+      injVX86 e'
+  | otherwise =
+      Cache (Virt x) (Virt x1):
+      WhileNZ x
+        (injVX86 e ++
+        [MOV (Virt x) (Virt x2)]):
+      injVX86 e'
+injVX86 (GetChar x e) = Call "getchar" (Virt x):injVX86 e
+injVX86 (PutChar x e) = Call "putchar" (Virt x):injVX86 e
+injVX86 Stop = []

@@ -11,6 +11,8 @@ import System.Environment (getArgs)
 import System.CPUTime
 import System.IO
 
+import Text.PrettyPrint.GenericPretty
+
 test_ :: String -> IO ()
 test_ = (print . bindeval . peval . memeval . peval . construct 0 . parse =<<) . readFile
 
@@ -31,6 +33,7 @@ testTime fn = do
   let !ir'''' = bindeval ir'''
   hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " done"
   --print ir''''
-  putStr $ genX86bf ir''''
+  --putStr $ printCode ir''''
+  pp . injVX86 $ ir''''
 
 main = getArgs >>= testTime . head
