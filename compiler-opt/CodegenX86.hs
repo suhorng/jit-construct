@@ -6,21 +6,11 @@ import CoreExpr
 
 import Control.Monad.State.Strict
 import Control.Monad.Writer
+import Control.Monad
 
 import Text.PrettyPrint.GenericPretty
 
-label  lbl   = tell ["L" ++ show lbl ++ ":"]
-add    a   n = tell ["  add " ++ a ++ ", (" ++ show n ++ ")"]
-call   lbl   = tell ["  call " ++ lbl]
-jmp    lbl   = tell ["  jmp L" ++ show lbl]
-jz     lbl   = tell ["  jz L" ++ show lbl]
-leaAdd a b n = tell ["  lea " ++ a ++ ", [" ++ b ++ "+(" ++ show n ++ ")]"]
-mov    a b   = when (a /= b) $ tell ["  mov " ++ a ++ ", " ++ b]
-movsxb a b   = tell ["  movsx " ++ a ++ ", byte " ++ b]
-push   a     = tell ["  push " ++ a]
-pop    a     = tell ["  pop " ++ a]
-test   a b   = tell ["  test " ++ a ++ ", " ++ b]
-ref    x     = "[" ++ x ++ "]"
+tells xs = tell [concat xs]
 
 genX86bf e = concat $ map (++ "\n") . execWriter . evalStateT genCode $ 0 where
   genCode = do
@@ -73,35 +63,63 @@ genX86bf e = concat $ map (++ "\n") . execWriter . evalStateT genCode $ 0 where
           "  mov edi, esp",
           "  rep stosd",
           "  lea esi, [esp + 4096]" ]
-    genX86bf' e
+    --genX86bf' e
     tell ["  leave",
           "  pop ebx",
           "  pop esi",
           "  pop edi",
           "  ret"]
 
-genX86bf' :: (MonadState s m, MonadWriter [String] m) => Expr -> m ()
-genX86bf' = undefined
+newLabel :: (MonadState Int m) => m String
+newLabel = do
+  lbl <- get
+  modify (+1)
+  return ("L" ++ show lbl)
+
+genX86bf' :: (MonadState Int m, MonadWriter [String] m) => VX86Inst -> m ()
+genX86bf' (MOV dst src) = tells ["  mov   ", extractOp dst, ", ", extractOp src]
+genX86bf' (ADD dst src) = tells ["  add   ", extractOp dst, ", ", extractOp src]
+genX86bf' (PUSH src) =    tells ["  push  ", extractOp src]
+genX86bf' (POP src) =     tells ["  pop   ", extractOp src]
+genX86bf' (CALL fn) =     tells ["  call  ", fn]
+genX86bf' (WhileNZ ptr loop) = do
+  let ptr' = case ptr of { Reg reg -> Indir reg 0; Val n -> Indir "" n }
+  lbl1 <- newLabel
+  lbl2 <- newLabel
+  tells [lbl1, ":"]
+  tells ["  cmp   ", extractOp ptr', ", ", extractOp (Val 0)]
+  tells ["  jz    ", lbl2]
+  mapM_ genX86bf' loop
+  tells ["  jmp   ", lbl1]
+  tells [lbl2, ":\n"]
+genX86bf' inst = error $ "genX86bf': unrecognized instruction '" ++ show inst ++ "'"
+
+extractOp (Reg reg) = reg
+extractOp (Val n) = show n
+extractOp (Indir basereg 0) = "[" ++ basereg ++ "]"
+extractOp (Indir "" offset) = "[" ++ show offset ++ "]"
+extractOp (Indir basereg offset) = "[" ++ basereg ++ " + " ++ show offset ++ "]"
+extractOp op = error "extractOp: unsupported operand '" ++ show op ++ "'"
 
 type VX86 = [VX86Inst]
 
 data VX86Inst =
     MOV VX86Op VX86Op
   | ADD VX86Op VX86Op
-  | LEA VX86Op VX86Op
   | PUSH VX86Op
   | POP VX86Op
   | CALL String
   | AddNew Int VX86Op VX86Op
   | Spill Int Int -- save a virtual register to memory
   | Cache VX86Op VX86Op -- cache a value in a register; hence can be discarded
-  | WhileNZ Int VX86 -- while the content of the register is not zero
+  | WhileNZ VX86Op VX86 -- while the content of the register is not zero
   | Call String VX86Op
   deriving (Generic, Show)
 
-data VX86Op = Virt Int | ArgO Int | ArgI Int | Local Int
+data VX86Op = Virt Int | Arg Int | Local Int
             | Reg String  | Val Int | MemImm Int | MemVirt Int
-            deriving (Generic, Show)
+            | Indir String Int
+            deriving (Generic, Show, Eq)
 
 instance Out VX86Inst
 instance Out VX86Op
@@ -117,16 +135,16 @@ injVX86 (Store (Imm n) (Imm m) e) = MOV (MemImm n) (Val m):injVX86 e
 injVX86 (Store (Imm n) (Var y) e) = MOV (MemImm n) (Virt y):injVX86 e
 injVX86 (While x (x1, x2) e e')
   | x1 == x2 =
-      WhileNZ x
+      WhileNZ (Virt x1)
         (injVX86 e):
-      Cache (Virt x) (Virt x2):
+      Cache (Virt x) (Virt x1):
       injVX86 e'
   | otherwise =
       Cache (Virt x) (Virt x1):
-      WhileNZ x
+      WhileNZ (Virt x)
         (injVX86 e ++
         [MOV (Virt x) (Virt x2)]):
       injVX86 e'
-injVX86 (GetChar x e) = Call "getchar" (Virt x):injVX86 e
-injVX86 (PutChar x e) = Call "putchar" (Virt x):injVX86 e
+injVX86 (GetChar x e) = Call "_rt_getchar" (Virt x):injVX86 e
+injVX86 (PutChar x e) = Call "_rt_putchar" (Virt x):injVX86 e
 injVX86 Stop = []
