@@ -5,7 +5,7 @@ module Main where
 import Brainfsck
 import CoreExpr
 import Simplifier
-import CodegenX86
+import CodegenC
 
 import System.Environment (getArgs)
 import System.CPUTime
@@ -30,7 +30,6 @@ testTime fn = do
   hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " bindeval"
   let !ir'''' = bindeval ir'''
   hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " done"
-  --print ir''''
-  putStr $ genX86bf ir''''
+  putStrLn (genC ir'''')
 
 main = getArgs >>= testTime . head
