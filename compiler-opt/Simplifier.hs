@@ -29,7 +29,7 @@ peval (While x (x1, x2) e1 e2) = doWhileXs (peval e2) where
     | otherwise = getBinding e x
   getBinding (Store _ _ e) x = getBinding e x
   getBinding (While y (x1, x2) e1 e2) x
-    | y == x = x
+    | y == x = if x1 == x2 then x1 else x
     | otherwise = getBinding e2 x
   getBinding (GetChar _ e) x = getBinding e x
   getBinding (PutChar _ e) x = getBinding e x
