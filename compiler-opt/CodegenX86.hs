@@ -128,6 +128,50 @@ genOp (Local n) = "locals[" ++ show n ++ "]"
 genOp (Mem (Var n)) = "mem(x" ++ show n ++ ")"
 genOp (Mem op) = error "genOp: Mem " ++ show op
 
+data StLife = StLife { nestLevel :: Int
+                     , livingLevel :: [(VX86Op, Int)]
+                     , toBeExtended :: [(Int, VX86Op)] }
+            deriving (Show, Generic)
+
+instance Out StLife
+
+insertKill = (`evalState` (StLife 0 [(Var 0, 0)] [])) . doExtend .
+             (`evalState` []) . doInsert
+
+modifyNestLevel f = modify $ \st -> st { nestLevel = f (nestLevel st )}
+modifyLivingLevel f = modify $ \st -> st { livingLevel = f (livingLevel st) }
+modifyToBeExtended f = modify $ \st -> st { toBeExtended = f (toBeExtended st )}
+
+born op = do
+  currLevel <- nestLevel `liftM` get
+  modifyLivingLevel ((op, currLevel):)
+
+doExtend [] = return []
+doExtend (LetAdd x y z:es) = (LetAdd x y z:) `liftM` (born x >> doExtend es)
+doExtend (Let x y:es) = (Let x y:) `liftM` (born x >> doExtend es)
+doExtend (While x (x1, x2) es:es') = do
+  when (x1 /= x2) (born x)
+  currLevel <- nestLevel `liftM` get
+  modifyNestLevel (+1)
+  es'' <- doExtend es
+  modifyNestLevel (subtract 1)
+  ops <- (filter ((== currLevel) . fst) . toBeExtended) `liftM` get
+  modifyToBeExtended (\\ ops)
+  es''' <- doExtend es'
+  let kills = map (`Kill` Nothing) $ map snd ops
+  return $ (While x (x1, x2) es'':kills) ++ es'''
+doExtend (GetChar x:es) = (GetChar x:) `liftM` doExtend es
+doExtend (PutChar x:es) = (PutChar x:) `liftM` doExtend es
+doExtend (Kill src Nothing:es) = do
+  currLevel <- nestLevel `liftM` get
+  Just opLevel <- (lookup src . livingLevel) `liftM` get
+  if opLevel >= currLevel
+    then (Kill src Nothing:) `liftM` doExtend es
+    else modifyToBeExtended ((opLevel, src):) >> doExtend es
+doExtend (Kill src (Just op):es) = error ("doExtend: Kill " ++ show (src, Just op))
+doExtend (MOV dst src:es) = (MOV dst src:) `liftM` doExtend es
+doExtend (LOOPNZ x es:es') = error ("doExtend: LOOPNZ " ++ show x)
+
 defined :: (MonadState [VX86Op] m) => VX86Op -> m ()
 defined op = do
   rs <- get
@@ -143,8 +187,6 @@ killVar op@(Var _) es = do
     then return es
     else modify (op:) >> return (Kill op Nothing:es)
 killVar _ es = return es
-
-insertKill = (`evalState` []) . doInsert
 
 doInsert [] = return []
 doInsert (LetAdd x y z:es) = do
@@ -319,6 +361,8 @@ doLimit es0@(MOV dst src:es) = do
   es' <- doLimit es
   return $ p1 ++ p2 ++ (MOV dst' src':es')
 doLimit es0@(LOOPNZ x es:es') = error "doLimit: LOOPNZ"
+
+collapse = undefined
 
 remWhile :: VX86 -> VX86
 remWhile [] = []
