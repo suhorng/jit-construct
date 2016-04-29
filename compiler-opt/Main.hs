@@ -34,6 +34,9 @@ testTime fn = do
   hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " done"
   --print ir''''
   --putStr $ printCode ir''''
-  pp . injVX86 $ ir''''
+  let inj = injVX86 ir''''
+      kld = insertKill inj
+      lmd = limitActiveVars kld
+  putStrLn (genCode lmd)
 
 main = getArgs >>= testTime . head

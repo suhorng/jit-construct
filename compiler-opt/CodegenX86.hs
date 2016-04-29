@@ -78,6 +78,56 @@ injOp :: E.Operand -> VX86Op
 injOp (E.Var x) = Var x
 injOp (E.Imm n) = Imm n
 
+getVars = map genOp . nub . foldrOp filterVar (++) [] where
+  filterVar (Var x) | x /= 0 = (Var x:)
+  filterVar _ = id
+
+genCode es =
+  concat [ "#include <cstdio>\n"
+         , "#include <cstdint>\n"
+         , "\n"
+         , "int8_t mem_arr[1048576];\n"
+         , "int locals[1048576];\n"
+         , "int8_t& mem(int pos) {\n"
+         , "   return mem_arr[pos + 514288];\n"
+         , "}\n"
+         , "\n"
+         , "int main() {\n"
+         , "int x0 = 0" ++ concatMap (", " ++) (getVars es) ++ ";\n"] ++
+  doGenCode es ++
+  concat [ "return 0;\n"
+         , "}\n"
+         , "\n"]
+
+doGenCode [] = ""
+doGenCode (LetAdd x y z:es) = genOp x ++ " = " ++ genOp y ++ " + " ++ genOp z ++ ";\n" ++ doGenCode es
+doGenCode (Let x y:es) = genOp x ++ " = " ++ genOp y ++ ";\n" ++ doGenCode es
+doGenCode (While x (x1, x2) es:es') | x1 == x2 =
+  "while (mem(" ++ genOp x1 ++ ") != 0) {\n" ++
+  doGenCode es ++
+  "}\n" ++
+  doGenCode es'
+doGenCode (While x (x1, x2) es:es') | x1 /= x2 =
+  genOp x ++ " = " ++ genOp x1 ++ ";\n" ++
+  "while (mem(" ++ genOp x ++ ") != 0) {\n" ++
+  doGenCode es ++
+  genOp x ++ " = " ++ genOp x2 ++ ";\n" ++
+  "}\n" ++
+  doGenCode es'
+doGenCode (GetChar x:es) = "mem(" ++ genOp x ++ ") = getchar();\n" ++ doGenCode es
+doGenCode (PutChar x:es) = "putchar(mem(" ++ genOp x ++ "));\n" ++ doGenCode es
+doGenCode (Kill src Nothing:es) = doGenCode es
+doGenCode (Kill src (Just dst):es) = genOp dst ++ " = " ++  genOp src ++ ";\n" ++ doGenCode es
+doGenCode (MOV dst src:es) = genOp dst ++ " = " ++ genOp src ++ ";\n" ++ doGenCode es
+doGenCode (LOOPNZ x es:es') = error "doGenCode: LOOPNZ"
+
+genOp (Var n) = 'x':show n
+genOp (Imm n) = '(':(show n ++ ")")
+genOp (Reg n) = error "genOp: Reg"
+genOp (Local n) = "locals[" ++ show n ++ "]"
+genOp (Mem (Var n)) = "mem(x" ++ show n ++ ")"
+genOp (Mem op) = error "genOp: Mem " ++ show op
+
 defined :: (MonadState [VX86Op] m) => VX86Op -> m ()
 defined op = do
   rs <- get
