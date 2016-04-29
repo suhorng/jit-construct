@@ -78,11 +78,11 @@ injOp :: E.Operand -> VX86Op
 injOp (E.Var x) = Var x
 injOp (E.Imm n) = Imm n
 
-getVars = map genOp . nub . foldrOp filterVar (++) [] where
+getCVars = map genCOp . nub . foldrOp filterVar (++) [] where
   filterVar (Var x) | x /= 0 = (Var x:)
   filterVar _ = id
 
-genCode es =
+genCCode es =
   concat [ "#include <cstdio>\n"
          , "#include <cstdint>\n"
          , "\n"
@@ -93,40 +93,40 @@ genCode es =
          , "}\n"
          , "\n"
          , "int main() {\n"
-         , "int x0 = 0" ++ concatMap (", " ++) (getVars es) ++ ";\n"] ++
-  doGenCode es ++
+         , "int x0 = 0" ++ concatMap (", " ++) (getCVars es) ++ ";\n"] ++
+  doGenCCode es ++
   concat [ "return 0;\n"
          , "}\n"
          , "\n"]
 
-doGenCode [] = ""
-doGenCode (LetAdd x y z:es) = genOp x ++ " = " ++ genOp y ++ " + " ++ genOp z ++ ";\n" ++ doGenCode es
-doGenCode (Let x y:es) = genOp x ++ " = " ++ genOp y ++ ";\n" ++ doGenCode es
-doGenCode (While x (x1, x2) es:es') | x1 == x2 =
-  "while (mem(" ++ genOp x1 ++ ") != 0) {\n" ++
-  doGenCode es ++
+doGenCCode [] = ""
+doGenCCode (LetAdd x y z:es) = genCOp x ++ " = " ++ genCOp y ++ " + " ++ genCOp z ++ ";\n" ++ doGenCCode es
+doGenCCode (Let x y:es) = genCOp x ++ " = " ++ genCOp y ++ ";\n" ++ doGenCCode es
+doGenCCode (While x (x1, x2) es:es') | x1 == x2 =
+  "while (mem(" ++ genCOp x1 ++ ") != 0) {\n" ++
+  doGenCCode es ++
   "}\n" ++
-  doGenCode es'
-doGenCode (While x (x1, x2) es:es') | x1 /= x2 =
-  genOp x ++ " = " ++ genOp x1 ++ ";\n" ++
-  "while (mem(" ++ genOp x ++ ") != 0) {\n" ++
-  doGenCode es ++
-  genOp x ++ " = " ++ genOp x2 ++ ";\n" ++
+  doGenCCode es'
+doGenCCode (While x (x1, x2) es:es') | x1 /= x2 =
+  genCOp x ++ " = " ++ genCOp x1 ++ ";\n" ++
+  "while (mem(" ++ genCOp x ++ ") != 0) {\n" ++
+  doGenCCode es ++
+  genCOp x ++ " = " ++ genCOp x2 ++ ";\n" ++
   "}\n" ++
-  doGenCode es'
-doGenCode (GetChar x:es) = "mem(" ++ genOp x ++ ") = getchar();\n" ++ doGenCode es
-doGenCode (PutChar x:es) = "putchar(mem(" ++ genOp x ++ "));\n" ++ doGenCode es
-doGenCode (Kill src Nothing:es) = doGenCode es
-doGenCode (Kill src (Just dst):es) = genOp dst ++ " = " ++  genOp src ++ ";\n" ++ doGenCode es
-doGenCode (MOV dst src:es) = genOp dst ++ " = " ++ genOp src ++ ";\n" ++ doGenCode es
-doGenCode (LOOPNZ x es:es') = error "doGenCode: LOOPNZ"
+  doGenCCode es'
+doGenCCode (GetChar x:es) = "mem(" ++ genCOp x ++ ") = getchar();\n" ++ doGenCCode es
+doGenCCode (PutChar x:es) = "putchar(mem(" ++ genCOp x ++ "));\n" ++ doGenCCode es
+doGenCCode (Kill src Nothing:es) = doGenCCode es
+doGenCCode (Kill src (Just dst):es) = genCOp dst ++ " = " ++  genCOp src ++ ";\n" ++ doGenCCode es
+doGenCCode (MOV dst src:es) = genCOp dst ++ " = " ++ genCOp src ++ ";\n" ++ doGenCCode es
+doGenCCode (LOOPNZ x es:es') = error "doGenCCode: LOOPNZ"
 
-genOp (Var n) = 'x':show n
-genOp (Imm n) = '(':(show n ++ ")")
-genOp (Reg n) = error "genOp: Reg"
-genOp (Local n) = "locals[" ++ show n ++ "]"
-genOp (Mem (Var n)) = "mem(x" ++ show n ++ ")"
-genOp (Mem op) = error "genOp: Mem " ++ show op
+genCOp (Var n) = 'x':show n
+genCOp (Imm n) = '(':(show n ++ ")")
+genCOp (Reg n) = error "genCOp: Reg"
+genCOp (Local n) = "locals[" ++ show n ++ "]"
+genCOp (Mem (Var n)) = "mem(x" ++ show n ++ ")"
+genCOp (Mem op) = error "genCOp: Mem " ++ show op
 
 data StLife = StLife { nestLevel :: Int
                      , livingLevel :: [(VX86Op, Int)]
@@ -362,7 +362,15 @@ doLimit es0@(MOV dst src:es) = do
   return $ p1 ++ p2 ++ (MOV dst' src':es')
 doLimit es0@(LOOPNZ x es:es') = error "doLimit: LOOPNZ"
 
-collapse = undefined
+fn [] = undefined
+fn (LetAdd x y z:es) = undefined
+fn (Let x y:es) = undefined
+fn (While x (x1, x2) es:es') = undefined
+fn (GetChar x:es) = undefined
+fn (PutChar x:es) = undefined
+fn (Kill src dst:es) = undefined
+fn (MOV dst src:es) = undefined
+fn (LOOPNZ x es:es') = undefined
 
 remWhile :: VX86 -> VX86
 remWhile [] = []
