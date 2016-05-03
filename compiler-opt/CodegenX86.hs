@@ -4,18 +4,18 @@ module CodegenX86 where
 
 import qualified CoreExpr as E
 
-import Control.Arrow (first, second, (&&&))
+import Control.Arrow (first, second, (&&&), (***))
 import Control.Monad
 import Control.Monad.Writer.Strict
 import Control.Monad.State.Strict
-import Data.List (nub, (\\))
+import Data.List (nub, (\\), partition)
 import Text.PrettyPrint.GenericPretty
 
 {-
 fn [] = undefined
 fn (LetAdd x y z:es) = undefined
 fn (Let x y:es) = undefined
-fn (While x (x1, x2) es:es') = undefined
+fn (While x (x1, x2) es []:es') = undefined
 fn (GetChar x:es) = undefined
 fn (PutChar x:es) = undefined
 fn (Kill src dst:es) = undefined
@@ -27,7 +27,7 @@ type VX86 = [VX86Inst]
 foldrOp f g e [] = e
 foldrOp f g e (LetAdd x y z:es) = f x (f y (f z (foldrOp f g e es)))
 foldrOp f g e (Let x y:es) = f x (f y (foldrOp f g e es))
-foldrOp f g e (While x (x1, x2) es:es') = f x (f x1 (f x2 (g (foldrOp f g e es) (foldrOp f g e es'))))
+foldrOp f g e (While x (x1, x2) es xs:es') = f x (f x1 (f x2 (g (foldrOp f g e es) (foldr (\(a1, a2) b -> f a1 (f a2 b)) (foldrOp f g e es') xs))))
 foldrOp f g e (GetChar x:es) = f x (foldrOp f g e es)
 foldrOp f g e (PutChar x:es) = f x (foldrOp f g e es)
 foldrOp f g e (Kill src Nothing:es) = f src (foldrOp f g e es)
@@ -38,13 +38,13 @@ foldrOp f g e (LOOPNZ x es:es') = f x (g (foldrOp f g e es) (foldrOp f g e es'))
 data VX86Inst =
     LetAdd VX86Op VX86Op VX86Op
   | Let VX86Op VX86Op
-  | While VX86Op (VX86Op, VX86Op) VX86
+  | While VX86Op (VX86Op, VX86Op) VX86 [(VX86Op, VX86Op)]
   | GetChar VX86Op
   | PutChar VX86Op
   | Kill VX86Op (Maybe VX86Op)
   | MOV VX86Op VX86Op
   | LOOPNZ VX86Op VX86
-  deriving (Show, Generic)
+  deriving (Eq, Show, Generic)
 
 data VX86Op =
     Var Int
@@ -57,6 +57,9 @@ data VX86Op =
 instance Out VX86Inst
 instance Out VX86Op
 
+isReg (Reg _) = True
+isReg _ = False
+
 injVX86 :: E.Expr -> VX86
 injVX86 (E.Let x (E.Add y z) e) = LetAdd (Var x) (injOp y) (injOp z):injVX86 e
 injVX86 (E.Let x (E.Mul y z) e) = error "injVX86: Let Mul"
@@ -64,7 +67,7 @@ injVX86 (E.Load x op e) = Let (Var x) (Mem (injOp op)):injVX86 e
 injVX86 (E.Store x op e) = MOV (Mem (injOp x)) (injOp op):injVX86 e
 injVX86 (E.While x (x1, x2) e e') =
   if x1 == x2 && (use x es || use x es') then error ("injVX86: While: use of " ++ show x) else
-  While (Var x) (Var x1, Var x2) es:
+  While (Var x) (Var x1, Var x2) es []:
   es'
   where use x = let x' = Var x in
                 foldrOp (\op b -> b || op == x' || op == Mem x') (||) False
@@ -93,7 +96,8 @@ genCCode es =
          , "}\n"
          , "\n"
          , "int main() {\n"
-         , "int x0 = 0" ++ concatMap (", " ++) (getCVars es) ++ ";\n"] ++
+--         , "int x0 = 0" ++ concatMap (", " ++) (getCVars es) ++ ";\n"] ++
+         , "int eax, ebx, ecx, edx, esi, tmp;\n"] ++
   doGenCCode es ++
   concat [ "return 0;\n"
          , "}\n"
@@ -102,30 +106,54 @@ genCCode es =
 doGenCCode [] = ""
 doGenCCode (LetAdd x y z:es) = genCOp x ++ " = " ++ genCOp y ++ " + " ++ genCOp z ++ ";\n" ++ doGenCCode es
 doGenCCode (Let x y:es) = genCOp x ++ " = " ++ genCOp y ++ ";\n" ++ doGenCCode es
-doGenCCode (While x (x1, x2) es:es') | x1 == x2 =
-  "while (mem(" ++ genCOp x1 ++ ") != 0) {\n" ++
-  doGenCCode es ++
-  "}\n" ++
-  doGenCCode es'
-doGenCCode (While x (x1, x2) es:es') | x1 /= x2 =
+doGenCCode (While x (x1, x2) es xs:es') | x1 /= x2 || isReg x =
   genCOp x ++ " = " ++ genCOp x1 ++ ";\n" ++
   "while (mem(" ++ genCOp x ++ ") != 0) {\n" ++
   doGenCCode es ++
-  genCOp x ++ " = " ++ genCOp x2 ++ ";\n" ++
+  concatMap (\(op, op') -> op ++ " = " ++ op' ++ ";\n") (genFixWorld ((x,x2):xs)) ++
+  "}\n" ++
+  doGenCCode es'
+doGenCCode (While x (x1, x2) es xs:es') | x1 == x2 =
+  "while (mem(" ++ genCOp x1 ++ ") != 0) {\n" ++
+  doGenCCode es ++
+  concatMap (\(op, op') -> op ++ " = " ++ op' ++ ";\n") (genFixWorld xs) ++
   "}\n" ++
   doGenCCode es'
 doGenCCode (GetChar x:es) = "mem(" ++ genCOp x ++ ") = getchar();\n" ++ doGenCCode es
 doGenCCode (PutChar x:es) = "putchar(mem(" ++ genCOp x ++ "));\n" ++ doGenCCode es
 doGenCCode (Kill src Nothing:es) = doGenCCode es
-doGenCCode (Kill src (Just dst):es) = genCOp dst ++ " = " ++  genCOp src ++ ";\n" ++ doGenCCode es
+doGenCCode (Kill src (Just dst):es) = genCOp dst ++ " = " ++  genCOp src ++ ";\n" ++ genCOp src ++ " = 0xcdcdcdcd;\n" ++ doGenCCode es
 doGenCCode (MOV dst src:es) = genCOp dst ++ " = " ++ genCOp src ++ ";\n" ++ doGenCCode es
 doGenCCode (LOOPNZ x es:es') = error "doGenCCode: LOOPNZ"
 
+genFixWorld = map (genCOp *** genCOp) . doGenFixWorld .
+              filter (not . uncurry (==))
+
+doGenFixWorld [] = []
+doGenFixWorld ops0 =
+  case findOut0 [] ops0 of
+    (Nothing, (op, op'):ops) -> (breakLoopTmp, op):(op, op'):insertBreakLoop op (doGenFixWorld ops)
+    (Just (op, op'), ops) -> (op, op'):doGenFixWorld ops
+
+findOut0 ops' [] = (Nothing, ops')
+findOut0 ops' ((op, op'):ops) =
+  if op `elem` map snd ops || op `elem` map snd ops'
+  then findOut0 (ops' ++ [(op, op')]) ops
+  else (Just (op, op'), ops' ++ ops)
+
+insertBreakLoop op0 [] = error $ "insertBreakLoop: " ++ show op0
+insertBreakLoop op0 ((op, op'):ops)
+  | op0 == op' = (op, breakLoopTmp):ops
+  | otherwise = (op, op'):insertBreakLoop op0 ops
+
+breakLoopTmp = Reg 5
+
 genCOp (Var n) = 'x':show n
 genCOp (Imm n) = '(':(show n ++ ")")
-genCOp (Reg n) = error "genCOp: Reg"
+genCOp (Reg m) = ["eax", "ebx", "ecx", "edx", "esi", "tmp"]!!m
 genCOp (Local n) = "locals[" ++ show n ++ "]"
 genCOp (Mem (Var n)) = "mem(x" ++ show n ++ ")"
+genCOp (Mem (Reg m)) = "mem(" ++ ["eax", "ebx", "ecx", "edx", "esi", "tmp"]!!m ++ ")"
 genCOp (Mem op) = error "genCOp: Mem " ++ show op
 
 data StLife = StLife { nestLevel :: Int
@@ -135,12 +163,12 @@ data StLife = StLife { nestLevel :: Int
 
 instance Out StLife
 
-insertKill = (`evalState` (StLife 0 [(Var 0, 0)] [])) . doExtend .
-             (`evalState` []) . doInsert
-
 modifyNestLevel f = modify $ \st -> st { nestLevel = f (nestLevel st )}
 modifyLivingLevel f = modify $ \st -> st { livingLevel = f (livingLevel st) }
 modifyToBeExtended f = modify $ \st -> st { toBeExtended = f (toBeExtended st )}
+
+insertKill = (`evalState` (StLife 0 [(Var 0, 0)] [])) . doExtend .
+             (`evalState` []) . doInsert
 
 born op = do
   currLevel <- nestLevel `liftM` get
@@ -149,7 +177,7 @@ born op = do
 doExtend [] = return []
 doExtend (LetAdd x y z:es) = (LetAdd x y z:) `liftM` (born x >> doExtend es)
 doExtend (Let x y:es) = (Let x y:) `liftM` (born x >> doExtend es)
-doExtend (While x (x1, x2) es:es') = do
+doExtend (While x (x1, x2) es xs:es') = do
   when (x1 /= x2) (born x)
   currLevel <- nestLevel `liftM` get
   modifyNestLevel (+1)
@@ -159,7 +187,7 @@ doExtend (While x (x1, x2) es:es') = do
   modifyToBeExtended (\\ ops)
   es''' <- doExtend es'
   let kills = map (`Kill` Nothing) $ map snd ops
-  return $ (While x (x1, x2) es'':kills) ++ es'''
+  return $ (While x (x1, x2) es'' xs:kills) ++ es'''
 doExtend (GetChar x:es) = (GetChar x:) `liftM` doExtend es
 doExtend (PutChar x:es) = (PutChar x:) `liftM` doExtend es
 doExtend (Kill src Nothing:es) = do
@@ -168,7 +196,7 @@ doExtend (Kill src Nothing:es) = do
   if opLevel >= currLevel
     then (Kill src Nothing:) `liftM` doExtend es
     else modifyToBeExtended ((opLevel, src):) >> doExtend es
-doExtend (Kill src (Just op):es) = error ("doExtend: Kill " ++ show (src, Just op))
+doExtend (Kill src dst:es) = (Kill src dst:) `liftM` doExtend es
 doExtend (MOV dst src:es) = (MOV dst src:) `liftM` doExtend es
 doExtend (LOOPNZ x es:es') = error ("doExtend: LOOPNZ " ++ show x)
 
@@ -197,11 +225,12 @@ doInsert (Let x y:es) = do
   es' <- killVar y =<< doInsert es
   defined x
   return (Let x y:es')
-doInsert (While x (x1, x2) es:es') = do
+doInsert (While x (x1, x2) es xs:es') = do
   es''' <- killVar x1 =<< killVar x2 =<< doInsert es'
+  modify (\\ map fst xs)
   es'' <- doInsert es
   when (x1 /= x2) (defined x)
-  return (While x (x1, x2) es'':es''')
+  return (While x (x1, x2) es'' xs:es''')
 doInsert (GetChar x:es) =
   return . (GetChar x:) =<< killVar x =<< doInsert es
 doInsert (PutChar x:es) =
@@ -243,7 +272,7 @@ spill es = do
       useSeq [] = []
       useSeq (LetAdd x y z:es) = y:z:useSeq es
       useSeq (Let x y:es) = y:useSeq es
-      useSeq (While x (x1, x2) es:es')
+      useSeq (While x (x1, x2) es []:es')
         | x1 == x2 = (x1:useSeq es) ++ (x2:useSeq es')
         | otherwise = (x:x1:useSeq es) ++ (x2:useSeq es')
       useSeq (GetChar x:es) = x:useSeq es
@@ -295,13 +324,13 @@ eraseDMailTo x world = do
   put $ world' { varLocal = varLocal world, activeVar = activeVar world }
   let getSaved op = v where Just v = lookup op (varLocal world')
       reloads = (filter ((/= x) . fst) $ activeVar world) \\ activeVar world'
-      reload (op, op') = Let op' (getSaved op)
+      reload (op, op') = (op', getSaved op)
       shifts = concatMap
                  (\(op, op') -> case lookup op (activeVar world') of
                    Just op'' | op' /= op'' -> [(op', op'')]
                    _ -> [])
                  (activeVar world)
-  return $ map (uncurry Let) shifts ++ map reload reloads
+  return $ shifts ++ map reload reloads
 
 limitActiveVars es = evalState (doLimit es) (StActive 0 nextOp [] actives) where
   nextOp = 1 + foldrOp maxVar max 0 es
@@ -315,33 +344,33 @@ doLimit es0@(LetAdd x y z:es) = do
   (y', p1) <- activate y es0
   (z', p2) <- activate z es0
   kills es
-  p3 <- create x es
+  p3 <- create x es0
   es' <- doLimit es
   return $ p1 ++ p2 ++ p3 ++ (LetAdd x y' z':es')
 doLimit es0@(Let x y:es) = do
   (y', p1) <- activate y es0
   kills es
-  p2 <- create x es
+  p2 <- create x es0
   es' <- doLimit es
   return $ p1 ++ p2 ++ (Let x y':es')
-doLimit es0@(While x (x1, x2) es:es') | x1 == x2 = do
+doLimit es0@(While x (x1, x2) es []:es') | x1 == x2 = do
   (x1', p1) <- activate x1 es0
   world <- get
   es'' <- doLimit es
-  p2 <- eraseDMailTo x world -- assumption: `x` is not used
+  xs <- eraseDMailTo x world -- assumption: `x` is not used
   kills es'
   es''' <- doLimit es'
-  return $ p1 ++ (While x (x1', x1') (es'' ++ p2):es''')
-doLimit es0@(While x (x1, x2) es:es') | x1 /= x2 = do
+  return $ p1 ++ (While x (x1', x1') es'' xs:es''')
+doLimit es0@(While x (x1, x2) es []:es') | x1 /= x2 = do
   (x1', p1) <- activate x1 es0
   p2 <- create x es0
   world <- get
   es'' <- doLimit es
   (x2', p3) <- activate x2 es'
-  p4 <- eraseDMailTo x world
+  xs <- eraseDMailTo x world
   kills es'
   es''' <- doLimit es'
-  return $ p1 ++ p2 ++ (While x (x1', x2') (es'' ++ p3 ++ p4):es''')
+  return $ p1 ++ p2 ++ (While x (x1', x2') (es'' ++ p3) xs:es''')
 doLimit es0@(GetChar x:es) = do
   (x', p1) <- activate x es0
   kills es
@@ -362,26 +391,109 @@ doLimit es0@(MOV dst src:es) = do
   return $ p1 ++ p2 ++ (MOV dst' src':es')
 doLimit es0@(LOOPNZ x es:es') = error "doLimit: LOOPNZ"
 
-fn [] = undefined
-fn (LetAdd x y z:es) = undefined
-fn (Let x y:es) = undefined
-fn (While x (x1, x2) es:es') = undefined
-fn (GetChar x:es) = undefined
-fn (PutChar x:es) = undefined
-fn (Kill src dst:es) = undefined
-fn (MOV dst src:es) = undefined
-fn (LOOPNZ x es:es') = undefined
+data StReg = StReg { freeRegs :: [VX86Op]
+                   , varAlloc :: [(VX86Op, VX86Op)] }
+            deriving (Show, Generic)
+
+instance Out StReg
+
+modifyFreeRegs f = modify $ \st -> st { freeRegs = f (freeRegs st) }
+modifyVarAlloc f = modify $ \st -> st { varAlloc = f (varAlloc st) }
+
+collapse es = Let rx0 (Imm 0):doRename es where
+  StReg rs als = execState (doCollapse es) (StReg rs0 [(Var 0, rx0)])
+  rs0 = map Reg [0..4] \\ [rx0]
+  rx0 = Reg 4
+
+  renamed (Mem op) = Mem (renamed op)
+  renamed op@(Var _)
+    | Just r <- lookup op als = r
+    | otherwise = error $ "renamed: " ++ show op ++ "\n\n" ++ show als
+  renamed op = op
+
+  doRename [] = []
+  doRename (LetAdd x y z:es) = LetAdd (renamed x) (renamed y) (renamed z):doRename es
+  doRename (Let x y:es) = Let (renamed x) (renamed y):doRename es
+  doRename (While x (x1, x2) es xs:es') =
+    While (if x1 == x2 then x else renamed x) (renamed x1, renamed x2)
+      (doRename es)
+      (map (renamed *** renamed) xs):
+    doRename es'
+  doRename (GetChar x:es) = GetChar (renamed x):doRename es
+  doRename (PutChar x:es) = PutChar (renamed x):doRename es
+  doRename (Kill src Nothing:es) = doRename es
+  doRename (Kill src dst@(Just (Local _)):es) = Kill (renamed src) dst:doRename es
+  doRename (Kill src dst:es) = error ("doRename: Kill " ++ show (src, dst))
+  doRename (MOV dst src:es) = MOV (renamed dst) (renamed src):doRename es
+  doRename (LOOPNZ x es:es') = error ("doRename: LOOPNZ " ++ show x)
+
+allocate (Mem op) = allocate op
+allocate op@(Var _) = do
+  (als, rs) <- (varAlloc &&& freeRegs) `liftM` get
+  case lookup op als of
+    Just r -> modifyFreeRegs (filter (/= r)) >> when (r `notElem` rs) (error ("allocate: repeated: " ++ show op ++ " " ++ show rs ++ "\n" ++ show als))
+    Nothing -> do
+      case rs of
+        [] -> error $ "allocate: " ++ show op ++ "\n" ++ show als
+        _ -> return ()
+      let r':rs' = rs
+      modifyFreeRegs (const rs')
+      modifyVarAlloc ((op, r'):)
+allocate op = return ()
+
+release op@(Var _) = do
+  (als, rs) <- (varAlloc &&& freeRegs) `liftM` get
+  case lookup op als of
+    Just r -> modifyFreeRegs (r:) >> when (r `elem` rs) (error ("release: repeated: " ++ show op ++ " " ++ show rs ++ "\n" ++ show als))
+    Nothing -> error $ "release Nothing: " ++ show op
+release (Local _) = return ()
+
+releases (Kill src Nothing:es) = release src >> releases es
+releases (Kill src dst@(Just _):es) = (Kill src dst:) `liftM` releases es
+releases es = return es
+
+doCollapse [] = return ()
+doCollapse (LetAdd x y z:es) = do
+  es' <- releases es
+  allocate x
+  doCollapse es'
+doCollapse (Let x y:es) = do
+  es' <- releases es
+  allocate x
+  doCollapse es'
+doCollapse (While x (x1, x2) es xs:es') = do
+  when (x1 /= x2) (allocate x)
+  world <- get
+  releases es >>= doCollapse
+  modify $ \world' -> world' { freeRegs = freeRegs world }
+  let x2Defined [] = False
+      x2Defined (LetAdd op _ _:es) = op == x2 || x2Defined es
+      x2Defined (Let op _:es) = op == x2 || x2Defined es
+      x2Defined (While op _ _ _:es) = op == x2 || x2Defined es
+      x2Defined (_:es) = x2Defined es
+      removeKillX2 (e@(Kill src dst):es)
+        | src == x2, Nothing <- dst = removeKillX2 es
+        | otherwise = e:removeKillX2 es
+      removeKillX2 es = es
+  releases (if x2Defined es then removeKillX2 es' else es') >>= doCollapse
+doCollapse (GetChar x:es) = releases es >>= doCollapse
+doCollapse (PutChar x:es) = releases es >>= doCollapse
+doCollapse (Kill src (Just _):es) = release src >> doCollapse es
+doCollapse (Kill src dst:es) = error ("doCollapse: Kill " ++ show (src, dst))
+doCollapse (MOV dst src:es) = releases es >>= doCollapse
+doCollapse (LOOPNZ x es:es') = error ("doCollapse: LOOPNZ " ++ show x)
 
 remWhile :: VX86 -> VX86
 remWhile [] = []
-remWhile (While x (x1, x2) es:es')
+remWhile (While x (x1, x2) es xs:es')
   | x1 == x2 =
-      LOOPNZ (Mem x1) (remWhile es):
+      LOOPNZ (Mem x1) (remWhile es ++ error "remWhile WHILE"):
       remWhile es'
   | otherwise =
       MOV x x1:
       LOOPNZ (Mem x)
         (remWhile es ++
-        [MOV x x2]):
+        [MOV x x2] ++
+        error "remWhile WHILE"):
       remWhile es'
 remWhile (e:es) = e:remWhile es

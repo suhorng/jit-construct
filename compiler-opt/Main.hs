@@ -37,6 +37,8 @@ testTime fn = do
   let inj = injVX86 ir''''
       kld = insertKill inj
       lmd = limitActiveVars kld
-  putStrLn (genCCode lmd)
+      kld2 = insertKill lmd
+      col = collapse kld2
+  putStrLn (genCCode col)
 
 main = getArgs >>= testTime . head
