@@ -6,8 +6,8 @@ import qualified CoreExpr as E
 
 import Control.Arrow (first, second, (&&&), (***))
 import Control.Monad
-import Control.Monad.Writer.Strict
 import Control.Monad.State.Strict
+import Control.Monad.Reader
 import Data.List ((\\), partition)
 import Text.PrettyPrint.GenericPretty
 
@@ -187,28 +187,29 @@ modifyLocalNum f = modify $ \st -> st { localNum = f (localNum st) }
 modifyVarLocal f = modify $ \st -> st { varLocal = f (varLocal st) }
 modifyActiveVar f = modify $ \st -> st { activeVar = f (activeVar st) }
 
+useSeq [] = []
+useSeq (LetAdd x y z:es) = y:z:useSeq es
+useSeq (Let x y:es) = y:useSeq es
+useSeq (While x (x1, x2) es []:es')
+  | x1 == x2 = (x1:useSeq es) ++ (x2:useSeq es')
+  | otherwise = (x:x1:useSeq es) ++ (x2:useSeq es')
+useSeq (GetChar x:es) = x:useSeq es
+useSeq (PutChar x:es) = x:useSeq es
+useSeq (Kill src dst:es) = src:useSeq es
+useSeq (MOV dst src:es) = dst:src:useSeq es
+useSeq (LOOPNZ lbl x es:es') = error "useSeq: LOOPNZ"
+
+stripMem (Mem op) = op
+stripMem op = op
+
 spill es = do
   (rs, vs) <- (activeVar &&& varLocal) `liftM` get
-  let (r, r') = findLastUse rs . map stripMem . useSeq $ es
-      stripMem (Mem op) = op
-      stripMem op = op
-
+  nextUses <- ask
+  let (r, r') = findLastUse rs . (++ nextUses) . map stripMem . useSeq $ es
       findLastUse (r:_) [] = r
       findLastUse [r] _ = r
       findLastUse rs (u:us) =
         findLastUse (filter ((/= u) . fst) rs) us
-
-      useSeq [] = []
-      useSeq (LetAdd x y z:es) = y:z:useSeq es
-      useSeq (Let x y:es) = y:useSeq es
-      useSeq (While x (x1, x2) es []:es')
-        | x1 == x2 = (x1:useSeq es) ++ (x2:useSeq es')
-        | otherwise = (x:x1:useSeq es) ++ (x2:useSeq es')
-      useSeq (GetChar x:es) = x:useSeq es
-      useSeq (PutChar x:es) = x:useSeq es
-      useSeq (Kill src dst:es) = src:useSeq es
-      useSeq (MOV dst src:es) = dst:src:useSeq es
-      useSeq (LOOPNZ lbl x es:es') = error "useSeq: LOOPNZ"
   kills [Kill r Nothing]
   case lookup r vs of
     Just _ -> return [] -- not Kill r' Nothing; no need Kill after alloc
@@ -261,7 +262,7 @@ eraseDMailTo x world = do
                  (activeVar world)
   return $ shifts ++ map reload reloads
 
-limitActiveVars es = evalState (doLimit es) (StActive 0 nextOp [] actives) where
+limitActiveVars es = evalState (runReaderT (doLimit es) []) (StActive 0 nextOp [] actives) where
   nextOp = 1 + foldrOp maxVar max 0 es
   maxVar (Var n) m = n `max` m
   maxVar (Mem op) m = maxVar op m
@@ -285,7 +286,7 @@ doLimit es0@(Let x y:es) = do
 doLimit es0@(While x (x1, x2) es []:es') | x1 == x2 = do
   (x1', p1) <- activate x1 es0
   world <- get
-  es'' <- doLimit es
+  es'' <- local (++ (map stripMem $ x2:useSeq es')) $ doLimit es
   xs <- eraseDMailTo x world -- assumption: `x` is not used
   kills es'
   es''' <- doLimit es'
@@ -294,7 +295,7 @@ doLimit es0@(While x (x1, x2) es []:es') | x1 /= x2 = do
   (x1', p1) <- activate x1 es0
   p2 <- create x es0
   world <- get
-  es'' <- doLimit es
+  es'' <- local (++ (map stripMem $ x2:useSeq es')) $ doLimit es
   (x2', p3) <- activate x2 es'
   xs <- eraseDMailTo x world
   kills es'
