@@ -39,6 +39,7 @@ testTime fn = do
       lmd = limitActiveVars kld
       kld2 = insertKill lmd
       col = collapse kld2
-  putStrLn (genCCode col)
+      asm = genCode col
+  putStr $ CodegenX86.printCode asm--putStrLn (genCCode col)
 
 main = getArgs >>= testTime . head

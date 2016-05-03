@@ -46,7 +46,6 @@ data VX86Inst =
   | LEA VX86Op VX86Op
   | ADD VX86Op VX86Op
   | MOV VX86Op VX86Op
-  | LABEL Int
   | LOOPNZ Int VX86Op VX86
   deriving (Eq, Show, Generic)
 
@@ -56,7 +55,7 @@ data VX86Op =
   | Reg Int
   | Local Int
   | Mem VX86Op
-  | Indir VX86Op VX86Op
+  | Indir String VX86Op VX86Op
   deriving (Eq, Show, Generic)
 
 instance Out VX86Inst
@@ -130,25 +129,6 @@ doGenCCode (Kill src Nothing:es) = doGenCCode es
 doGenCCode (Kill src (Just dst):es) = genCOp dst ++ " = " ++  genCOp src ++ ";\n" ++ genCOp src ++ " = 0xcdcdcdcd;\n" ++ doGenCCode es
 doGenCCode (MOV dst src:es) = genCOp dst ++ " = " ++ genCOp src ++ ";\n" ++ doGenCCode es
 doGenCCode (LOOPNZ lbl x es:es') = error "doGenCCode: LOOPNZ"
-
-genFixWorld = doGenFixWorld . filter (not . uncurry (==))
-
-doGenFixWorld [] = []
-doGenFixWorld ops0 =
-  case findOut0 [] ops0 of
-    (Nothing, (op, op'):ops) -> (breakLoopTmp, op):(op, op'):insertBreakLoop op (doGenFixWorld ops)
-    (Just (op, op'), ops) -> (op, op'):doGenFixWorld ops
-
-findOut0 ops' [] = (Nothing, ops')
-findOut0 ops' ((op, op'):ops) =
-  if op `elem` map snd ops || op `elem` map snd ops'
-  then findOut0 (ops' ++ [(op, op')]) ops
-  else (Just (op, op'), ops' ++ ops)
-
-insertBreakLoop op0 [] = error $ "insertBreakLoop: " ++ show op0
-insertBreakLoop op0 ((op, op'):ops)
-  | op0 == op' = (op, breakLoopTmp):ops
-  | otherwise = (op, op'):insertBreakLoop op0 ops
 
 breakLoopTmp = Reg 5
 
@@ -247,7 +227,7 @@ doInsert (MOV dst src:es) =
   return . (MOV dst src:) =<< killVar dst =<< killVar src =<< doInsert es
 doInsert (LOOPNZ lbl x es:es') = error ("doInsert: LOOPNZ " ++ show x)
 
-activeVarLimit = 5
+activeVarLimit = 4
 
 data StActive = StActive { localNum :: Int
                          , opNum :: Int
@@ -404,10 +384,10 @@ instance Out StReg
 modifyFreeRegs f = modify $ \st -> st { freeRegs = f (freeRegs st) }
 modifyVarAlloc f = modify $ \st -> st { varAlloc = f (varAlloc st) }
 
-collapse es = Let rx0 (Imm 0):doRename es where
+collapse es = doRename es where
   StReg rs als = execState (doCollapse es) (StReg rs0 [(Var 0, rx0)])
-  rs0 = map Reg [0..4] \\ [rx0]
-  rx0 = Reg 4
+  rs0 = map Reg [0..3] \\ [rx0]
+  rx0 = Reg 1
 
   renamed (Mem op) = Mem (renamed op)
   renamed op@(Var _)
@@ -487,6 +467,25 @@ doCollapse (Kill src dst:es) = error ("doCollapse: Kill " ++ show (src, dst))
 doCollapse (MOV dst src:es) = releases es >>= doCollapse
 doCollapse (LOOPNZ lbl x es:es') = error ("doCollapse: LOOPNZ " ++ show x)
 
+genFixWorld = doGenFixWorld . filter (not . uncurry (==))
+
+doGenFixWorld [] = []
+doGenFixWorld ops0 =
+  case findOut0 [] ops0 of
+    (Nothing, (op, op'):ops) -> (breakLoopTmp, op):(op, op'):insertBreakLoop op (doGenFixWorld ops)
+    (Just (op, op'), ops) -> (op, op'):doGenFixWorld ops
+
+findOut0 ops' [] = (Nothing, ops')
+findOut0 ops' ((op, op'):ops) =
+  if op `elem` map snd ops || op `elem` map snd ops'
+  then findOut0 (ops' ++ [(op, op')]) ops
+  else (Just (op, op'), ops' ++ ops)
+
+insertBreakLoop op0 [] = error $ "insertBreakLoop: " ++ show op0
+insertBreakLoop op0 ((op, op'):ops)
+  | op0 == op' = (op, breakLoopTmp):ops
+  | otherwise = (op, op'):insertBreakLoop op0 ops
+
 freshLabel :: (MonadState Int m) => m Int
 freshLabel = do
   n <- get
@@ -499,7 +498,7 @@ doGenCode [] = return []
 doGenCode (LetAdd dst src1 src2:es)
   | dst == src1 = (ADD dst src2:) `liftM` doGenCode es
   | dst == src2 = (ADD dst src1:) `liftM` doGenCode es
-  | otherwise = (LEA dst (Indir src1 src2):) `liftM` doGenCode es
+  | otherwise = (LEA dst (Indir "" src1 src2):) `liftM` doGenCode es
 doGenCode (Let dst src:es) = (MOV dst src:) `liftM` doGenCode es
 doGenCode (While x (x1, x2) es xs:es') | x1 /= x2 || isReg x = do
   lbl <- freshLabel
@@ -520,10 +519,90 @@ doGenCode (Kill src (Just dst):es) = (MOV dst src:) `liftM` doGenCode es
 doGenCode (MOV dst src:es) = (MOV dst src:) `liftM` doGenCode es
 doGenCode (LOOPNZ lbl x es:es') = error $ "LOOPNZ: " ++ show x
 
-regs = ["eax", "ebx", "ecx", "edx", "esi", "[tmp]"]
+regs = ["eax", "ebx", "ecx", "edx", "esi", "[tmp]", "edi"]
+regs' = ["al", "bl", "cl", "dl", error "regs': esi", error "regs': [tmp]", error "regs': edi"]
 
-genOp (Imm n) = "(" ++ show n ++ ")"
-genOp (Reg m) = regs!!m
-genOp (Local n) = "[" ++ show n ++ "]"
-genOp (Mem (Reg m)) | m < activeVarLimit = "[" ++ regs!!m ++ "]"
-genOp op = error "genOp: " ++ show op
+printOp0 regs (Imm n) = "(" ++ show n ++ ")"
+printOp0 regs (Reg m) = regs!!m
+printOp0 regs (Indir s op1 op2) =
+  s ++ " [" ++ printOp0 regs op1 ++
+            (if op2 /= Imm 0 then " + " ++ printOp0 regs op2 else "") ++
+        "]"
+printOp0 regs (Local n) = printOp0 regs (Indir "dword" (Reg 6) (Imm (n*4)))
+printOp0 regs (Mem op@(Reg m)) | m < activeVarLimit = printOp0 regs (Indir "byte" op (Imm 0))
+printOp0 regs op = error "genOp: " ++ show op
+
+printOp = printOp0 regs
+
+printCode es = pre ++ doPrint es ++ post where
+  pre  = concat [ "[bits 32]\n"
+                , "[section .text]\n"
+                , "global _bf_main\n"
+                , "extern _putchar\n"
+                , "extern _getchar\n"
+                , "extern _tmp\n\n"
+                , "_rt_putchar:\n"
+                , "    push  ebp\n"
+                , "    mov   ebp, esp\n"
+                , "    push  eax\n"
+                , "    push  ecx\n"
+                , "    push  edx\n"
+                , "    mov   eax, [ebp + 8]\n"
+                , "    movzx edx, byte [eax]\n"
+                , "    push  edx\n"
+                , "    call  _putchar\n"
+                , "    add   esp, 4\n"
+                , "    pop   edx\n"
+                , "    pop   ecx\n"
+                , "    pop   eax\n"
+                , "    leave\n"
+                , "    ret   4\n\n"
+                , "_rt_getchar:\n"
+                , "    push  ebp\n"
+                , "    mov   ebp, esp\n"
+                , "    push  eax\n"
+                , "    push  ecx\n"
+                , "    push  edx\n"
+                , "    call  _getchar\n"
+                , "    mov   edx, [ebp + 8]\n"
+                , "    mov   [edx], al\n"
+                , "    pop   edx\n"
+                , "    pop   ecx\n"
+                , "    pop   eax\n"
+                , "    leave\n"
+                , "    ret   4\n\n"
+                , "_bf_main:\n"
+                , "    push  ebp\n"
+                , "    mov   ebp, esp\n"
+                , "    push  ebx\n"
+                , "    push  edi\n"
+                , "    mov   ebx, [ebp + 8]\n"
+                , "    mov   edi, [ebp + 12]\n" ]
+  post = concat [ "    pop   edi\n"
+                , "    pop   ebx\n"
+                , "    leave\n"
+                , "    ret\n" ]
+
+doPrint [] = ""
+doPrint (Call flbl op:es) =
+  "    push  " ++ printOp op ++ "\n" ++
+  "    call  " ++ flbl ++ "\n" ++
+  doPrint es
+doPrint (LEA dst src:es) =
+  "    lea   " ++ printOp dst ++ ", " ++ printOp src ++ "\n" ++ doPrint es
+doPrint (ADD dst src:es) =
+  "    add   " ++ printOp dst ++ ", " ++ printOp src ++ "\n" ++ doPrint es
+doPrint (MOV dst src@(Mem _):es) =
+  "    movsx " ++ printOp dst ++ ", " ++ printOp src ++ "\n" ++ doPrint es
+doPrint (MOV dst@(Mem _) src:es) =
+  "    mov   " ++ printOp dst ++ ", " ++ printOp0 regs' src ++ "\n" ++ doPrint es
+doPrint (MOV dst src:es) =
+  "    mov   " ++ printOp dst ++ ", " ++ printOp src ++ "\n" ++ doPrint es
+doPrint (LOOPNZ lbl x es:es') =
+  "L" ++ show (lbl*2) ++ ":\n" ++
+  "    cmp   " ++ printOp x ++ ", 0\n" ++
+  "    jz    L" ++ show (lbl*2+1) ++ "\n" ++
+  doPrint es ++
+  "    jmp   L" ++ show (lbl*2) ++ "\n" ++
+  "L" ++ show (lbl*2+1) ++ ":\n" ++
+  doPrint es'
