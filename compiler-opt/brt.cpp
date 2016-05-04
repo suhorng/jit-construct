@@ -2,7 +2,7 @@
 #include <cstdint>
 
 extern "C" void bf_main(uint8_t*, int*);
-extern "C" int tmp;
+int tmp;
 
 uint8_t mem[1048576];
 int locals[1048576];

@@ -266,7 +266,9 @@ eraseDMailTo x world = do
                  (activeVar world)
   return $ shifts ++ map reload reloads
 
-limitActiveVars es = evalState (runReaderT (doLimit es) []) (StActive 0 nextOp [] actives) where
+limitActiveVars es = getRight . runExcept . (`evalStateT` st0) . (`runReaderT` []) . doLimit $ es where
+  getRight (Right a) = a
+  st0 = StActive 0 nextOp [] actives
   nextOp = 1 + foldrOp maxVar max 0 es
   maxVar (Var n) m = n `max` m
   maxVar (Mem op) m = maxVar op m
