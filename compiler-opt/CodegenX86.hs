@@ -255,7 +255,7 @@ kills _ = return ()
 
 eraseDMailTo x world = do
   world' <- get
-  put $ world' { varLocal = varLocal world, activeVar = activeVar world }
+  put $ world { opNum = opNum world' }
   let getSaved op = v where Just v = lookup op (varLocal world')
       reloads = (filter ((/= x) . fst) $ activeVar world) \\ activeVar world'
       reload (op, op') = (op', getSaved op)
