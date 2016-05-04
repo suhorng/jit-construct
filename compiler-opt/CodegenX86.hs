@@ -8,6 +8,7 @@ import Control.Arrow (first, second, (&&&), (***))
 import Control.Monad
 import Control.Monad.State.Strict
 import Control.Monad.Reader
+import Control.Monad.Except
 import Data.List ((\\), partition)
 import Text.PrettyPrint.GenericPretty
 
@@ -202,18 +203,21 @@ useSeq (LOOPNZ lbl x es:es') = error "useSeq: LOOPNZ"
 stripMem (Mem op) = op
 stripMem op = op
 
-spill es = do
-  (rs, vs) <- (activeVar &&& varLocal) `liftM` get
+spillAny es = do
+  rs <- activeVar `liftM` get
   nextUses <- ask
-  let (r, r') = findLastUse rs . (++ nextUses) . map stripMem . useSeq $ es
+  let (r, _) = findLastUse rs . (++ nextUses) . map stripMem . useSeq $ es
       findLastUse (r:_) [] = r
       findLastUse [r] _ = r
-      findLastUse rs (u:us) =
-        findLastUse (filter ((/= u) . fst) rs) us
+      findLastUse rs (u:us) = findLastUse (filter ((/= u) . fst) rs) us
+  spillOne r
+
+spillOne r = do
+  (rs, vs) <- (activeVar &&& varLocal) `liftM` get
   kills [Kill r Nothing]
-  case lookup r vs of
-    Just _ -> return [] -- not Kill r' Nothing; no need Kill after alloc
-    Nothing -> do
+  case (lookup r vs, lookup r rs) of
+    (Just _, _) -> return [] -- not Kill r' Nothing; no need Kill after alloc
+    (Nothing, Just r') -> do
       n <- localNum `liftM` get
       modifyLocalNum (+1)
       modifyVarLocal ((r, Local n):)
@@ -235,12 +239,12 @@ activate op@(Var x) es = do
     Just op' -> return (op', [])
     Nothing
       | length rs < activeVarLimit -> load
-      | otherwise -> spill es >>= \p -> second (p ++) `liftM` load
+      | otherwise -> spillAny es >>= \p -> second (p ++) `liftM` load
 activate op es = return (op, [])
 
 create x es = do
   rs <- activeVar `liftM` get
-  p <- if length rs < activeVarLimit then return [] else spill es
+  p <- if length rs < activeVarLimit then return [] else spillAny es
   modifyActiveVar ((x,x):)
   return p
 
@@ -490,67 +494,67 @@ printCode es = pre ++ doPrint es ++ post where
                 , "extern _getchar\n"
                 , "extern _tmp\n\n"
                 , "_rt_putchar:\n"
-                , "    push  ebp\n"
-                , "    mov   ebp, esp\n"
-                , "    push  eax\n"
-                , "    push  ecx\n"
-                , "    push  edx\n"
-                , "    mov   eax, [ebp + 8]\n"
-                , "    movzx edx, byte [eax]\n"
-                , "    push  edx\n"
-                , "    call  _putchar\n"
-                , "    add   esp, 4\n"
-                , "    pop   edx\n"
-                , "    pop   ecx\n"
-                , "    pop   eax\n"
-                , "    leave\n"
-                , "    ret   4\n\n"
+                , "\tpush  ebp\n"
+                , "\tmov   ebp, esp\n"
+                , "\tpush  eax\n"
+                , "\tpush  ecx\n"
+                , "\tpush  edx\n"
+                , "\tmov   eax, [ebp + 8]\n"
+                , "\tmovzx edx, byte [eax]\n"
+                , "\tpush  edx\n"
+                , "\tcall  _putchar\n"
+                , "\tadd   esp, 4\n"
+                , "\tpop   edx\n"
+                , "\tpop   ecx\n"
+                , "\tpop   eax\n"
+                , "\tleave\n"
+                , "\tret   4\n\n"
                 , "_rt_getchar:\n"
-                , "    push  ebp\n"
-                , "    mov   ebp, esp\n"
-                , "    push  eax\n"
-                , "    push  ecx\n"
-                , "    push  edx\n"
-                , "    call  _getchar\n"
-                , "    mov   edx, [ebp + 8]\n"
-                , "    mov   [edx], al\n"
-                , "    pop   edx\n"
-                , "    pop   ecx\n"
-                , "    pop   eax\n"
-                , "    leave\n"
-                , "    ret   4\n\n"
+                , "\tpush  ebp\n"
+                , "\tmov   ebp, esp\n"
+                , "\tpush  eax\n"
+                , "\tpush  ecx\n"
+                , "\tpush  edx\n"
+                , "\tcall  _getchar\n"
+                , "\tmov   edx, [ebp + 8]\n"
+                , "\tmov   [edx], al\n"
+                , "\tpop   edx\n"
+                , "\tpop   ecx\n"
+                , "\tpop   eax\n"
+                , "\tleave\n"
+                , "\tret   4\n\n"
                 , "_bf_main:\n"
-                , "    push  ebp\n"
-                , "    mov   ebp, esp\n"
-                , "    push  ebx\n"
-                , "    push  edi\n"
-                , "    mov   ebx, [ebp + 8]\n"
-                , "    mov   edi, [ebp + 12]\n" ]
-  post = concat [ "    pop   edi\n"
-                , "    pop   ebx\n"
-                , "    leave\n"
-                , "    ret\n" ]
+                , "\tpush  ebp\n"
+                , "\tmov   ebp, esp\n"
+                , "\tpush  ebx\n"
+                , "\tpush  edi\n"
+                , "\tmov   ebx, [ebp + 8]\n"
+                , "\tmov   edi, [ebp + 12]\n" ]
+  post = concat [ "\tpop   edi\n"
+                , "\tpop   ebx\n"
+                , "\tleave\n"
+                , "\tret\n" ]
 
 doPrint [] = ""
 doPrint (Call flbl op:es) =
-  "    push  " ++ printOp op ++ "\n" ++
-  "    call  " ++ flbl ++ "\n" ++
+  "\tpush  " ++ printOp op ++ "\n" ++
+  "\tcall  " ++ flbl ++ "\n" ++
   doPrint es
 doPrint (LEA dst src:es) =
-  "    lea   " ++ printOp dst ++ ", " ++ printOp src ++ "\n" ++ doPrint es
+  "\tlea   " ++ printOp dst ++ ", " ++ printOp src ++ "\n" ++ doPrint es
 doPrint (ADD dst src:es) =
-  "    add   " ++ printOp dst ++ ", " ++ printOp src ++ "\n" ++ doPrint es
+  "\tadd   " ++ printOp dst ++ ", " ++ printOp src ++ "\n" ++ doPrint es
 doPrint (MOV dst src@(Mem _):es) =
-  "    movsx " ++ printOp dst ++ ", " ++ printOp src ++ "\n" ++ doPrint es
+  "\tmovsx " ++ printOp dst ++ ", " ++ printOp src ++ "\n" ++ doPrint es
 doPrint (MOV dst@(Mem _) src:es) =
-  "    mov   " ++ printOp dst ++ ", " ++ printOp0 regs' src ++ "\n" ++ doPrint es
+  "\tmov   " ++ printOp dst ++ ", " ++ printOp0 regs' src ++ "\n" ++ doPrint es
 doPrint (MOV dst src:es) =
-  "    mov   " ++ printOp dst ++ ", " ++ printOp src ++ "\n" ++ doPrint es
+  "\tmov   " ++ printOp dst ++ ", " ++ printOp src ++ "\n" ++ doPrint es
 doPrint (LOOPNZ lbl x es:es') =
   "L" ++ show (lbl*2) ++ ":\n" ++
-  "    cmp   " ++ printOp x ++ ", 0\n" ++
-  "    jz    L" ++ show (lbl*2+1) ++ "\n" ++
+  "\tcmp   " ++ printOp x ++ ", 0\n" ++
+  "\tjz    L" ++ show (lbl*2+1) ++ "\n" ++
   doPrint es ++
-  "    jmp   L" ++ show (lbl*2) ++ "\n" ++
+  "\tjmp   L" ++ show (lbl*2) ++ "\n" ++
   "L" ++ show (lbl*2+1) ++ ":\n" ++
   doPrint es'
