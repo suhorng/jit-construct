@@ -210,14 +210,27 @@ spillAny es = do
       findLastUse (r:_) [] = r
       findLastUse [r] _ = r
       findLastUse rs (u:us) = findLastUse (filter ((/= u) . fst) rs) us
-  spillOne r
+  vs <- varLocal `liftM` get
+  case lookup r vs of
+    Just _ -> kills [Kill r Nothing]
+    Nothing -> throwError r --spillOne r
+
+spills xs m = m `catchError` \x -> do
+  when (x `notElem` map stripMem xs) $ throwError x
+  p <- spillOne x
+  es' <- spills xs m
+  return $ p ++ es'
 
 spillOne r = do
-  (rs, vs) <- (activeVar &&& varLocal) `liftM` get
-  kills [Kill r Nothing]
-  case (lookup r vs, lookup r rs) of
-    (Just _, _) -> return [] -- not Kill r' Nothing; no need Kill after alloc
-    (Nothing, Just r') -> do
+  vs <- varLocal `liftM` get
+  killed <- kills [Kill r Nothing]
+  case killed of
+    [Kill _ Nothing] -> return ()
+    _ -> get >>= \st -> error $ pretty ("spillOne", r, killed, st)
+  let [Kill r' Nothing] = killed
+  case lookup r vs of
+    Just _ -> error $ pretty ("spillOne lookup Just", r, vs, killed)
+    Nothing -> do
       n <- localNum `liftM` get
       modifyLocalNum (+1)
       modifyVarLocal ((r, Local n):)
@@ -248,10 +261,14 @@ create x es = do
   modifyActiveVar ((x,x):)
   return p
 
-kills (Kill x _:es) = do
-  modifyActiveVar $ filter ((/= x) . fst)
-  kills es
-kills _ = return ()
+kills (Kill src dst:es) = do
+  rs <- activeVar `liftM` get
+  case lookup src rs of
+    Just src' -> do
+      modifyActiveVar $ filter ((/= src) . fst)
+      (Kill src' dst:) `liftM` kills es
+    Nothing -> kills es
+kills _ = return []
 
 eraseDMailTo x world = do
   world' <- get
@@ -266,8 +283,9 @@ eraseDMailTo x world = do
                  (activeVar world)
   return $ shifts ++ map reload reloads
 
-limitActiveVars es = getRight . runExcept . (`evalStateT` st0) . (`runReaderT` []) . doLimit $ es where
+limitActiveVars es = getRight . runExcept . (`evalStateT` st0) . (`runReaderT` []) $ spills [Var 0] (doLimit es) where
   getRight (Right a) = a
+  getRight (Left e) = error $ "getRight: " ++ show e
   st0 = StActive 0 nextOp [] actives
   nextOp = 1 + foldrOp maxVar max 0 es
   maxVar (Var n) m = n `max` m
@@ -279,52 +297,53 @@ doLimit es0@[] = return []
 doLimit es0@(LetAdd x y z:es) = do
   (y', p1) <- activate y es0
   (z', p2) <- activate z es0
-  kills es
+  p4 <- kills es
   p3 <- create x es0
-  es' <- doLimit es
-  return $ p1 ++ p2 ++ p3 ++ (LetAdd x y' z':es')
+  es' <- spills [x,y,z] (doLimit es)
+  return $ p1 ++ p2 ++ p3 ++ (LetAdd x y' z':p4) ++ es'
 doLimit es0@(Let x y:es) = do
+  st <- get
   (y', p1) <- activate y es0
-  kills es
+  p3 <- kills es
   p2 <- create x es0
-  es' <- doLimit es
-  return $ p1 ++ p2 ++ (Let x y':es')
+  es' <- spills [x,y] (doLimit es)
+  return $ p1 ++ p2 ++ (Let x y':p3) ++ es'
 doLimit es0@(While x (x1, x2) es []:es') | x1 == x2 = do
   (x1', p1) <- activate x1 es0
   world <- get
-  es'' <- local (++ (map stripMem $ x2:useSeq es')) $ doLimit es
+  es'' <- local (++ (map stripMem $ x2:useSeq es')) $ spills [x1] (doLimit es)
   xs <- eraseDMailTo x world -- assumption: `x` is not used
-  kills es'
+  p2 <- kills es'
   es''' <- doLimit es'
-  return $ p1 ++ (While x (x1', x1') es'' xs:es''')
+  return $ p1 ++ (While x (x1', x1') es'' xs:p2) ++ es'''
 doLimit es0@(While x (x1, x2) es []:es') | x1 /= x2 = do
   (x1', p1) <- activate x1 es0
   p2 <- create x es0
   world <- get
-  es'' <- local (++ (map stripMem $ x2:useSeq es')) $ doLimit es
+  es'' <- local (++ (map stripMem $ x2:useSeq es')) $ spills [x,x1] (doLimit es)
   (x2', p3) <- activate x2 es'
   xs <- eraseDMailTo x world
-  kills es'
-  es''' <- doLimit es'
-  return $ p1 ++ p2 ++ (While x (x1', x2') (es'' ++ p3) xs:es''')
+  p4 <- kills es'
+  es''' <- spills [x] (doLimit es')
+  return $ p1 ++ p2 ++ (While x (x1', x2') (es'' ++ p3) xs:p4) ++ es'''
 doLimit es0@(GetChar x:es) = do
   (x', p1) <- activate x es0
-  kills es
-  es' <- doLimit es
-  return $ p1 ++ (GetChar x':es')
+  p2 <- kills es
+  es' <- spills [x] (doLimit es)
+  return $ p1 ++ (GetChar x':p2) ++ es'
 doLimit es0@(PutChar x:es) = do
   (x', p1) <- activate x es0
-  kills es
-  es' <- doLimit es
-  return $ p1 ++ (PutChar x':es')
+  p2 <- kills es
+  es' <- spills [x] (doLimit es)
+  return $ p1 ++ (PutChar x':p2) ++ es'
 doLimit es0@(Kill src (Just op):es) = error ("doLimit: Kill " ++ show (src, Just op))
 doLimit es0@(Kill src Nothing:es) = doLimit es
 doLimit es0@(MOV dst src:es) = do
   (dst', p1) <- activate dst es0
   (src', p2) <- activate src es0
-  kills es
-  es' <- doLimit es
-  return $ p1 ++ p2 ++ (MOV dst' src':es')
+  p3 <- kills es
+  es' <- spills [dst,src] (doLimit es)
+  return $ p1 ++ p2 ++ (MOV dst' src':p3) ++ es'
 doLimit es0@(LOOPNZ lbl x es:es') = error "doLimit: LOOPNZ"
 
 data StReg = StReg { freeRegs :: [VX86Op]

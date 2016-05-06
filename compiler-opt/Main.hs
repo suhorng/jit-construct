@@ -36,12 +36,13 @@ testTime fn = do
   hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " liveness"
   let !kld = insertKill inj
   hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " spill"
+  --mapM_ pp kld >> putStrLn "======== ^ kld ========="
   let !lmd = limitActiveVars kld
   hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " liveness"
-  let !kld2 = insertKill lmd
-  hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " assign"
-  let !col = collapse kld2
+  --mapM_ pp lmd >> putStrLn "======== ^ lmd ========="
+  let !col = collapse lmd
   hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " gencode"
+  --mapM_ pp col >> putStrLn "================="
   let !asm = genCode col
   hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " print"
   putStr $ CodegenX86.printCode asm
