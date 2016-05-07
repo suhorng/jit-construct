@@ -270,17 +270,20 @@ kills (Kill src dst:es) = do
     Nothing -> kills es
 kills _ = return []
 
-eraseDMailTo x world = do
+eraseDMailTo x' world = do
   world' <- get
   put $ world { opNum = opNum world' }
   let getSaved op = v where Just v = lookup op (varLocal world')
-      reloads = (filter ((/= x) . fst) $ activeVar world) \\ activeVar world'
+      avoid
+        | Just x <- x' = filter ((/= x) . fst)
+        | Nothing <- x' = id
+      reloads = avoid (activeVar world) \\ activeVar world'
       reload (op, op') = (op', getSaved op)
       shifts = concatMap
                  (\(op, op') -> case lookup op (activeVar world') of
                    Just op'' | op' /= op'' -> [(op', op'')]
                    _ -> [])
-                 (activeVar world)
+                 (avoid (activeVar world))
   return $ shifts ++ map reload reloads
 
 limitActiveVars es = getRight . runExcept . (`evalStateT` st0) . (`runReaderT` []) $ spills [Var 0] (doLimit es) where
@@ -312,7 +315,7 @@ doLimit es0@(While x (x1, x2) es []:es') | x1 == x2 = do
   (x1', p1) <- activate x1 es0
   world <- get
   es'' <- local (++ (map stripMem $ x2:useSeq es')) $ spills [x1] (doLimit es)
-  xs <- eraseDMailTo x world -- assumption: `x` is not used
+  xs <- eraseDMailTo Nothing world -- assumption: `x` is not used
   p2 <- kills es'
   es''' <- doLimit es'
   return $ p1 ++ (While x (x1', x1') es'' xs:p2) ++ es'''
@@ -320,9 +323,9 @@ doLimit es0@(While x (x1, x2) es []:es') | x1 /= x2 = do
   (x1', p1) <- activate x1 es0
   p2 <- create x es0
   world <- get
-  es'' <- local (++ (map stripMem $ x2:useSeq es')) $ spills [x,x1] (doLimit es)
+  es'' <- local (++ (map stripMem $ x2:useSeq es')) $ spills [x] (doLimit es)
   (x2', p3) <- activate x2 es'
-  xs <- eraseDMailTo x world
+  xs <- eraseDMailTo (Just x) world
   p4 <- kills es'
   es''' <- spills [x] (doLimit es')
   return $ p1 ++ p2 ++ (While x (x1', x2') (es'' ++ p3) xs:p4) ++ es'''
