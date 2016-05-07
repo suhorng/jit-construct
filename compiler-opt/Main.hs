@@ -6,6 +6,7 @@ import Brainfsck
 import CoreExpr
 import Simplifier
 import CodegenX86
+import CodegenCFromX86
 
 import System.Environment (getArgs)
 import System.CPUTime
@@ -43,8 +44,11 @@ testTime fn = do
   let !col = collapse lmd
   hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " gencode"
   --mapM_ pp col >> putStrLn "================="
+--  putStr $ genCCode lmd
+--{-
   let !asm = genCode col
   hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " print"
   putStr $ CodegenX86.printCode asm
+---}
 
 main = getArgs >>= testTime . head

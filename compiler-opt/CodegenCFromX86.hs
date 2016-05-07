@@ -18,8 +18,8 @@ genCCode es =
          , "}\n"
          , "\n"
          , "int main() {\n"
---         , "int x0 = 0" ++ concatMap (", " ++) (getCVars es) ++ ";\n"] ++
-         , "int eax, ebx, ecx, edx, esi, tmp;\n"] ++
+         , "int x0 = 0" ++ concatMap (", " ++) (getCVars es) ++ ";\n"
+         , "int eax, ebx, ecx, edx, tmp;\n"] ++
   doGenCCode es ++
   concat [ "return 0;\n"
          , "}\n"
