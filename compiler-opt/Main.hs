@@ -35,11 +35,11 @@ testTime fn = do
   let !inj = injVX86 ir''''
   hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " liveness"
   let !kld = insertKill inj
-  hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " spill"
   --mapM_ pp kld >> putStrLn "======== ^ kld ========="
+  hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " spill"
   let !lmd = limitActiveVars kld
-  hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " liveness"
   --mapM_ pp lmd >> putStrLn "======== ^ lmd ========="
+  hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " assignment"
   let !col = collapse lmd
   hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " gencode"
   --mapM_ pp col >> putStrLn "================="
