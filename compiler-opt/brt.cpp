@@ -4,6 +4,13 @@
 extern "C" void bf_main(uint8_t*, int*);
 int tmp;
 
+#if !defined(_WIN32) && !defined(__MINGW64__) && !defined(__MINGW32__)
+extern "C" void _putchar(int ch) { putchar(ch); }
+extern "C" int _getchar() { return getchar(); }
+extern "C" void _bf_main(uint8_t*, int*);
+void bf_main(uint8_t* ebx, int* edi) { _bf_main(ebx, edi); }
+#endif
+
 uint8_t mem[1048576];
 int locals[1048576];
 
