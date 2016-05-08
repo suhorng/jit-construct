@@ -359,7 +359,7 @@ modifyFreeRegs f = modify $ \st -> st { freeRegs = f (freeRegs st) }
 modifyVarAlloc f = modify $ \st -> st { varAlloc = f (varAlloc st) }
 
 collapse es = doRename es where
-  StReg rs als = execState (doCollapse es) (StReg rs0 [(Var 0, rx0)])
+  StReg rs als = execState (doCollapse [] es) (StReg rs0 [(Var 0, rx0)])
   rs0 = map Reg [0..3] \\ [rx0]
   rx0 = Reg 1
 
@@ -385,19 +385,23 @@ collapse es = doRename es where
   doRename (MOV dst src:es) = MOV (renamed dst) (renamed src):doRename es
   doRename (LOOPNZ lbl x es:es') = error ("doRename: LOOPNZ " ++ show x)
 
-allocate (Mem op) = allocate op
-allocate op@(Var _) = do
+allocate hints (Mem op) = allocate hints op
+allocate hints op@(Var _) = do
   (als, rs) <- (varAlloc &&& freeRegs) `liftM` get
   case lookup op als of
     Just r -> modifyFreeRegs (filter (/= r)) >> when (r `notElem` rs) (error ("allocate: repeated: " ++ show op ++ " " ++ show rs ++ "\n" ++ show als))
     Nothing -> do
-      case rs of
-        [] -> error $ "allocate: " ++ show op ++ "\n" ++ show als
-        _ -> return ()
-      let r':rs' = rs
-      modifyFreeRegs (const rs')
+      when (null rs) $ error ("allocate: " ++ show op ++ "\n" ++ show als)
+      let getAlloc op
+            | Just r' <- lookup op als = [r']
+            | otherwise = []
+          ravail = filter (`elem` rs) . concatMap getAlloc . map stripMem $ hints
+          (r':_)
+            | [] <- ravail = rs
+            | otherwise = ravail
+      modifyFreeRegs $ filter (/= r')
       modifyVarAlloc ((op, r'):)
-allocate op = return ()
+allocate hints op = return ()
 
 release op@(Var _) = do
   (als, rs) <- (varAlloc &&& freeRegs) `liftM` get
@@ -410,19 +414,19 @@ releases (Kill src Nothing:es) = release src >> releases es
 releases (Kill src dst@(Just _):es) = (Kill src dst:) `liftM` releases es
 releases es = return es
 
-doCollapse [] = return ()
-doCollapse (LetAdd x y z:es) = do
+doCollapse hints [] = return ()
+doCollapse hints (LetAdd x y z:es) = do
   es' <- releases es
-  allocate x
-  doCollapse es'
-doCollapse (Let x y:es) = do
+  allocate (y:z:hints) x
+  doCollapse [] es'
+doCollapse hints (Let x y:es) = do
   es' <- releases es
-  allocate x
-  doCollapse es'
-doCollapse (While x (x1, x2) es xs:es') = do
-  when (x1 /= x2) (allocate x)
+  allocate (y:hints) x
+  doCollapse [] es'
+doCollapse hints (While x (x1, x2) es xs:es') = do
+  when (x1 /= x2) (allocate [x1] x)
   world <- get
-  releases es >>= doCollapse
+  releases es >>= doCollapse []
   modify $ \world' -> world' { freeRegs = freeRegs world }
   let x2Defined [] = False
       x2Defined (LetAdd op _ _:es) = op == x2 || x2Defined es
@@ -433,13 +437,13 @@ doCollapse (While x (x1, x2) es xs:es') = do
         | src == x2, Nothing <- dst = removeKillX2 es
         | otherwise = e:removeKillX2 es
       removeKillX2 es = es
-  releases (if x2Defined es then removeKillX2 es' else es') >>= doCollapse
-doCollapse (GetChar x:es) = releases es >>= doCollapse
-doCollapse (PutChar x:es) = releases es >>= doCollapse
-doCollapse (Kill src (Just _):es) = release src >> doCollapse es
-doCollapse (Kill src dst:es) = error ("doCollapse: Kill " ++ show (src, dst))
-doCollapse (MOV dst src:es) = releases es >>= doCollapse
-doCollapse (LOOPNZ lbl x es:es') = error ("doCollapse: LOOPNZ " ++ show x)
+  releases (if x2Defined es then removeKillX2 es' else es') >>= doCollapse []
+doCollapse hints (GetChar x:es) = releases es >>= doCollapse []
+doCollapse hints (PutChar x:es) = releases es >>= doCollapse []
+doCollapse hints (Kill src (Just _):es) = release src >> doCollapse (src:hints) es
+doCollapse hints (Kill src dst:es) = error ("doCollapse: Kill " ++ show (src, dst))
+doCollapse hints (MOV dst src:es) = releases es >>= doCollapse []
+doCollapse hints (LOOPNZ lbl x es:es') = error ("doCollapse: LOOPNZ " ++ show x)
 
 genFixWorld = doGenFixWorld . filter (not . uncurry (==))
 
@@ -470,6 +474,8 @@ freshLabel = do
 
 genCode = (`evalState` 0) . doGenCode
 
+doGenCode (Kill src (Just dst):Let src' dst':es)
+  | src == src' && dst == dst' = (MOV dst src:) `liftM` doGenCode es
 doGenCode [] = return []
 doGenCode (LetAdd dst src1 src2:es)
   | dst == src1 = (ADD dst src2:) `liftM` doGenCode es
