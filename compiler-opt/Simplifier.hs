@@ -9,10 +9,10 @@ data PExpr = PVar Int
            | PAdd Int Int -- var + imm
            | PMul Int Int -- var * imm
 
-peval :: Expr -> Expr
-peval (Let x c@(Add (Var y) (Imm 0)) e) = Let x c (peval (psubst e (PVar y) x))
-peval (Let x c@(Add (Var y) (Imm n)) e) = Let x c (peval (psubst e (PAdd y n) x))
-peval (Let x c@(Mul (Var y) (Imm n)) e) = Let x c (peval (psubst e (PMul y n) x))
+peval :: Prog -> Prog
+peval (Let x c@(Add (Opr (Var y)) (Opr (Imm 0))) e) = Let x c (peval (psubst e (PVar y) x))
+peval (Let x c@(Add (Opr (Var y)) (Opr (Imm n))) e) = Let x c (peval (psubst e (PAdd y n) x))
+peval (Let x c@(Mul (Opr (Var y)) (Opr (Imm n))) e) = Let x c (peval (psubst e (PMul y n) x))
 peval (Load x op e) = Load x op (peval e)
 peval (Store x op e) = Store x op (peval e)
 peval (While x (x1, x2) e1 e2) = doWhileXs (peval e2) where
@@ -22,7 +22,7 @@ peval (While x (x1, x2) e1 e2) = doWhileXs (peval e2) where
     | x == x2'  = While x (x1, x1) (psubst e1' (PVar x1) x) (psubst e2' (PVar x1) x)
     | otherwise = While x (x1, x2') e1' e2'
   getBinding (Let y c e) x
-    | y == x, Add (Var z) (Imm 0) <- c = z
+    | y == x, Add (Opr (Var z)) (Opr (Imm 0)) <- c = z
     | otherwise = getBinding e x
   getBinding (Load y op e) x
     | y == x = x
@@ -47,7 +47,7 @@ peval Stop = Stop
   algorithm as in the `mem2reg` pass of LLVM.
 -}
 
-memeval :: Expr -> Expr
+memeval :: Prog -> Prog
 memeval (Let x c e) = Let x c (memeval e)
 memeval (Load x op e) = Load x op (memeval e)
 memeval (Store x op e) = doStoreX (memeval (putGet e x op)) where
@@ -56,11 +56,11 @@ memeval (Store x op e) = doStoreX (memeval (putGet e x op)) where
       Var x' | putPut e x' -> e
       _ -> Store x op e
 
-  putGet :: Expr -> Operand -> Operand -> Expr
+  putGet :: Prog -> Operand -> Operand -> Prog
   putGet (Let y c e) x v = Let y c (putGet e x v)
   putGet (Load y op e) x v
-    | op == x, Var _ <- v = Let y (Add v (Imm 0)) (putGet e x v)
-    | op == x, Imm _ <- v = Let y (Add v (Imm 0)) (putGet e x v)
+    | op == x, Var _ <- v = Let y (Add (Opr v) (Opr (Imm 0))) (putGet e x v)
+    | op == x, Imm _ <- v = Let y (Add (Opr v) (Opr (Imm 0))) (putGet e x v)
     -- note: created unhandled pattern `Imm + Imm` here
   putGet (Load y op e) x v = Load y op (putGet e x v)
   putGet e@(Store _ _ _) x v = e
@@ -80,7 +80,7 @@ memeval (Store x op e) = doStoreX (memeval (putGet e x op)) where
     - Another possible improvement: there is a write to x in e2 while
       no read from x in e1
   -}
-  putPut :: Expr -> Int -> Bool
+  putPut :: Prog -> Int -> Bool
   putPut (Let y c e) x = putPut e x
   putPut (Load y _ _) x = False
   putPut (Store op _ e) x
@@ -101,10 +101,10 @@ memeval (PutChar x e) = PutChar x (memeval e)
 memeval Stop = Stop
 
 -- Drop unused bindings
-bindeval :: Expr -> Expr
+bindeval :: Prog -> Prog
 bindeval = bindeval' 0
 
-bindeval' :: Int -> Expr -> Expr
+bindeval' :: Int -> Prog -> Prog
 bindeval' loopptr (Let x c e) = doLetX (bindeval' loopptr e) where
   doLetX e = if x == loopptr || bindused e x then Let x c e else e
 bindeval' loopptr (Load x op e) = doLoadX (bindeval' loopptr e) where
@@ -115,9 +115,9 @@ bindeval' loopptr (GetChar x e) = GetChar x (bindeval' loopptr e)
 bindeval' loopptr (PutChar x e) = PutChar x (bindeval' loopptr e)
 bindeval' loopptr Stop = Stop
 
-bindused :: Expr -> Int -> Bool
-bindused (Let y (Add op1 op2) e) x = bindInOp op1 x || bindInOp op2 x || bindused e x
-bindused (Let y (Mul op1 op2) e) x = bindInOp op1 x || bindInOp op2 x || bindused e x
+bindused :: Prog -> Int -> Bool
+bindused (Let y (Add (Opr op1) (Opr op2)) e) x = bindInOp op1 x || bindInOp op2 x || bindused e x
+bindused (Let y (Mul (Opr op1) (Opr op2)) e) x = bindInOp op1 x || bindInOp op2 x || bindused e x
 bindused (Load y op e) x = y == x || bindInOp op x || bindused e x
 bindused (Store y op e) x = bindInOp y x || bindInOp op x || bindused e x
 bindused (While y (x1, x2) e1 e2) x = x1 == x || bindused e1 x || bindused e2 x
@@ -129,11 +129,11 @@ bindInOp (Var y) x = y == x
 bindInOp (Imm _) x = False
 
 -- e1 [ e2 / x ] is written as psubst e1 e2 x
-psubst :: Expr -> PExpr -> Int -> Expr
-psubst (Let y (Add (Var x') (Imm n)) e1) e2@(PAdd z m) x
-  | x == x' = Let y (Add (Var z) (Imm (n+m))) (psubst e1 e2 x)
-psubst (Let y (Add op1 op2) e1) e2 x = Let y (Add (psubstOp op1 e2 x) (psubstOp op2 e2 x)) (psubst e1 e2 x)
-psubst (Let y (Mul op1 op2) e1) e2 x = Let y (Mul (psubstOp op1 e2 x) (psubstOp op2 e2 x)) (psubst e1 e2 x)
+psubst :: Prog -> PExpr -> Int -> Prog
+psubst (Let y (Add (Opr (Var x')) (Opr (Imm n))) e1) e2@(PAdd z m) x
+  | x == x' = Let y (Add (Opr (Var z)) (Opr (Imm (n+m)))) (psubst e1 e2 x)
+psubst (Let y (Add (Opr op1) (Opr op2)) e1) e2 x = Let y (Add (Opr (psubstOp op1 e2 x)) (Opr (psubstOp op2 e2 x))) (psubst e1 e2 x)
+psubst (Let y (Mul (Opr op1) (Opr op2)) e1) e2 x = Let y (Mul (Opr (psubstOp op1 e2 x)) (Opr (psubstOp op2 e2 x))) (psubst e1 e2 x)
 psubst (Load y op e1) e2 x = Load y (psubstOp op e2 x) (psubst e1 e2 x)
 psubst (Store y op e1) e2 x = Store (psubstOp y e2 x) (psubstOp op e2 x) (psubst e1 e2 x)
 psubst (While y (x1, x2) e1 e1') e2 x = While y (x1', x2') (psubst e1 e2 x) (psubst e1' e2 x) where

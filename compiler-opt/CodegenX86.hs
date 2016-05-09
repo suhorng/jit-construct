@@ -65,9 +65,9 @@ instance Out VX86Op
 isReg (Reg _) = True
 isReg _ = False
 
-injVX86 :: E.Expr -> VX86
-injVX86 (E.Let x (E.Add y z) e) = LetAdd (Var x) (injOp y) (injOp z):injVX86 e
-injVX86 (E.Let x (E.Mul y z) e) = error "injVX86: Let Mul"
+injVX86 :: E.Prog -> VX86
+injVX86 (E.Let x (E.Add (E.Opr y) (E.Opr z)) e) = LetAdd (Var x) (injOp y) (injOp z):injVX86 e
+injVX86 (E.Let x (E.Mul (E.Opr y) (E.Opr z)) e) = error "injVX86: Let Mul"
 injVX86 (E.Load x op e) = Let (Var x) (Mem (injOp op)):injVX86 e
 injVX86 (E.Store x op e) = MOV (Mem (injOp x)) (injOp op):injVX86 e
 injVX86 (E.While x (x1, x2) e e') =
