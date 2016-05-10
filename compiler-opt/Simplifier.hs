@@ -4,25 +4,19 @@ import CoreExpr
 
 {- Try to use finally-tagless some day? -}
 
-data PExpr = PVar Int
-           | PImm Int
-           | PAdd Int Int -- var + imm
-           | PMul Int Int -- var * imm
-
 peval :: Prog -> Prog
-peval (Let x c@(Add (Opr (Var y)) (Opr (Imm 0))) e) = Let x c (peval (psubst e (PVar y) x))
-peval (Let x c@(Add (Opr (Var y)) (Opr (Imm n))) e) = Let x c (peval (psubst e (PAdd y n) x))
-peval (Let x c@(Mul (Opr (Var y)) (Opr (Imm n))) e) = Let x c (peval (psubst e (PMul y n) x))
+peval (Let x c e) = Let x c' (peval (psubst e c' x)) where
+  c' = nomialComp (normalize c)
 peval (Load x op e) = Load x op (peval e)
 peval (Store x op e) = Store x op (peval e)
 peval (While x (x1, x2) e1 e2) = doWhileXs (peval e2) where
   e1' = peval e1
   x2' = getBinding e1' x2
   doWhileXs e2'
-    | x == x2'  = While x (x1, x1) (psubst e1' (PVar x1) x) (psubst e2' (PVar x1) x)
+    | x == x2'  = While x (x1, x1) (psubst e1' (Opr (Var x1)) x) (psubst e2' (Opr (Var x1)) x)
     | otherwise = While x (x1, x2') e1' e2'
   getBinding (Let y c e) x
-    | y == x, Add (Opr (Var z)) (Opr (Imm 0)) <- c = z
+    | y == x, Opr (Var z) <- c = z
     | otherwise = getBinding e x
   getBinding (Load y op e) x
     | y == x = x
@@ -37,6 +31,31 @@ peval (While x (x1, x2) e1 e2) = doWhileXs (peval e2) where
 peval (GetChar x e) = GetChar x (peval e)
 peval (PutChar x e) = PutChar x (peval e)
 peval Stop = Stop
+
+data PComp = PNomial [([Operand], Int)] !Int
+
+normalize (Opr x@(Var _)) = PNomial [([x], 1)] 0
+normalize (Opr (Imm m)) = PNomial [] m
+normalize (Add c1 c2) = PNomial (add xs1 xs2) (m1+m2) where
+  PNomial xs1 m1 = normalize c1
+  PNomial xs2 m2 = normalize c2
+  add xs [] = xs
+  add [] ys = ys
+  add (x@(ps,a):xs) (y@(qs,b):ys)
+    | ps < qs = x:add xs (y:ys)
+    | ps > qs = y:add (x:xs) ys
+    | a+b == 0 = add xs ys -- ps == qs
+    | otherwise = (ps,a+b):add xs ys -- p == qs
+normalize (Mul c1 c2) = error "normalize: Mul"
+
+nomialComp (PNomial [] m) = Opr (Imm m)
+nomialComp (PNomial xs m)
+  | m == 0 = c
+  | otherwise = Add (Opr (Imm m)) c
+  where c = foldr1 Add . concatMap termComp $ xs
+        termComp (ps, 0) = []
+        termComp (ps, 1) = [foldr1 Mul (map Opr ps)]
+        termComp (ps, m) = [Mul (Opr (Imm m)) (foldr1 Mul (map Opr ps))]
 
 {-
   get x >>= put x    = return ()            -- not implemented
@@ -92,9 +111,6 @@ memeval (Store x op e) = doStoreX (memeval (putGet e x op)) where
     | otherwise = putPut e x
   putPut (PutChar _ _) x = False
   putPut Stop x = False
-
-  injOp (Var x) = PVar x
-  injOp (Imm n) = PImm n
 memeval (While y xs e1 e2) = While y xs (memeval e1) (memeval e2)
 memeval (GetChar x e) = GetChar x (memeval e)
 memeval (PutChar x e) = PutChar x (memeval e)
@@ -116,8 +132,7 @@ bindeval' loopptr (PutChar x e) = PutChar x (bindeval' loopptr e)
 bindeval' loopptr Stop = Stop
 
 bindused :: Prog -> Int -> Bool
-bindused (Let y (Add (Opr op1) (Opr op2)) e) x = bindInOp op1 x || bindInOp op2 x || bindused e x
-bindused (Let y (Mul (Opr op1) (Opr op2)) e) x = bindInOp op1 x || bindInOp op2 x || bindused e x
+bindused (Let y c e) x = bindInComp c x || bindused e x
 bindused (Load y op e) x = y == x || bindInOp op x || bindused e x
 bindused (Store y op e) x = bindInOp y x || bindInOp op x || bindused e x
 bindused (While y (x1, x2) e1 e2) x = x1 == x || bindused e1 x || bindused e2 x
@@ -125,32 +140,41 @@ bindused (GetChar y e) x = y == x || bindused e x
 bindused (PutChar y e) x = y == x || bindused e x
 bindused Stop x = False
 
+bindInComp (Opr op) x = bindInOp op x
+bindInComp (Add c1 c2) x = bindInComp c1 x || bindInComp c2 x
+bindInComp (Mul c1 c2) x = bindInComp c1 x || bindInComp c2 x
+
 bindInOp (Var y) x = y == x
 bindInOp (Imm _) x = False
 
 -- e1 [ e2 / x ] is written as psubst e1 e2 x
-psubst :: Prog -> PExpr -> Int -> Prog
-psubst (Let y (Add (Opr (Var x')) (Opr (Imm n))) e1) e2@(PAdd z m) x
-  | x == x' = Let y (Add (Opr (Var z)) (Opr (Imm (n+m)))) (psubst e1 e2 x)
-psubst (Let y (Add (Opr op1) (Opr op2)) e1) e2 x = Let y (Add (Opr (psubstOp op1 e2 x)) (Opr (psubstOp op2 e2 x))) (psubst e1 e2 x)
-psubst (Let y (Mul (Opr op1) (Opr op2)) e1) e2 x = Let y (Mul (Opr (psubstOp op1 e2 x)) (Opr (psubstOp op2 e2 x))) (psubst e1 e2 x)
+psubst :: Prog -> Comp -> Int -> Prog
+psubst (Let y c e1) e2 x = Let y (psubstComp c e2 x) (psubst e1 e2 x)
 psubst (Load y op e1) e2 x = Load y (psubstOp op e2 x) (psubst e1 e2 x)
 psubst (Store y op e1) e2 x = Store (psubstOp y e2 x) (psubstOp op e2 x) (psubst e1 e2 x)
 psubst (While y (x1, x2) e1 e1') e2 x = While y (x1', x2') (psubst e1 e2 x) (psubst e1' e2 x) where
   x1' = case e2 of
-          PVar y | x1 == x -> y
+          Opr (Var y) | x1 == x -> y
           _ -> x1
   x2' = case e2 of
-          PVar y | x2 == x -> y
+          Opr (Var y) | x2 == x -> y
           _ -> x2
 psubst (GetChar y e1) e2 x
-  | y == x, PVar z <- e2 = GetChar z (psubst e1 e2 x)
+  | y == x, Opr (Var z) <- e2 = GetChar z (psubst e1 e2 x)
   | otherwise = GetChar y (psubst e1 e2 x)
 psubst (PutChar y e1) e2 x
-  | y == x, PVar z <- e2 = PutChar z (psubst e1 e2 x)
+  | y == x, Opr (Var z) <- e2 = PutChar z (psubst e1 e2 x)
   | otherwise = PutChar y (psubst e1 e2 x)
 psubst Stop _ _ = Stop
 
-psubstOp (Var y) (PVar z) x | y == x = Var z
-psubstOp (Var y) (PImm n) x | y == x = Imm n
+psubstComp :: Comp -> Comp -> Int -> Comp
+psubstComp (Opr op) e2 x
+  | Var y <- op, y == x = e2
+  | otherwise = Opr op
+psubstComp (Add c1 c2) e2 x = Add (psubstComp c1 e2 x) (psubstComp c2 e2 x)
+psubstComp (Mul c1 c2) e2 x = Add (psubstComp c1 e2 x) (psubstComp c2 e2 x)
+
+psubstOp :: Operand -> Comp -> Int -> Operand
+psubstOp (Var y) (Opr (Var z)) x | y == x = Var z
+psubstOp (Var y) (Opr (Imm n)) x | y == x = Imm n
 psubstOp op e2 x = op

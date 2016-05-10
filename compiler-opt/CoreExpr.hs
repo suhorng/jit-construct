@@ -27,7 +27,7 @@ data Comp = Opr !Operand
 
 data Operand = Var !Int
              | Imm !Int
-             deriving (Show, Eq, Generic)
+             deriving (Show, Eq, Ord, Generic)
 
 instance Show Prog where show = printCode
 instance Out Prog
