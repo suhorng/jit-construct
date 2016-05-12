@@ -525,8 +525,8 @@ doGenCode (Kill src (Just dst):es) = (MOV dst src:) `liftM` doGenCode es
 doGenCode (MOV dst src:es) = (MOV dst src:) `liftM` doGenCode es
 doGenCode (LOOPNZ lbl x es:es') = error $ "LOOPNZ: " ++ show x
 
-regs = ["eax", "ebx", "ecx", "edx", "esi", "[tmp]", "edi"]
-regs' = ["al", "bl", "cl", "dl", error "regs': esi", error "regs': [tmp]", error "regs': edi"]
+regs = ["eax", "ebx", "ecx", "edx", "esi", "[_tmp]", "edi"]
+regs' = ["al", "bl", "cl", "dl", error "regs': esi", error "regs': [_tmp]", error "regs': edi"]
 
 printOp0 regs (Imm n) = "(" ++ show n ++ ")"
 printOp0 regs (Reg m) = regs!!m
