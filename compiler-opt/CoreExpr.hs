@@ -87,3 +87,40 @@ construct' (op:bs)       = do
             Let tmp2 (Add (Opr (Var tmp)) (Opr (Imm (-1)))) .
             Store (Var ptr) (Var tmp2) <$>
             construct' bs
+
+flatten :: Prog -> Prog
+flatten p = evalState (flatten' p) (1 + maxProgOp p) where
+  maxProgOp (Let x _ e) = max x (maxProgOp e)
+  maxProgOp (Load x _ e) = max x (maxProgOp e)
+  maxProgOp (Store _ _ e) = maxProgOp e
+  maxProgOp (While x _ e1 e2) = maximum [x, maxProgOp e1, maxProgOp e2]
+  maxProgOp (GetChar _ e) = maxProgOp e
+  maxProgOp (PutChar _ e) = maxProgOp e
+  maxProgOp Stop = 0
+
+flatten' :: (Applicative m, MonadState Int m) => Prog -> m Prog
+flatten' (Let x c e) = flattenComp c (\c' -> Let x c' <$> flatten' e)
+flatten' (Load x op e) = Load x op <$> flatten' e
+flatten' (Store x op e) = Store x op <$> flatten' e
+flatten' (While x (x1, x2) e1 e2) = While x (x1, x2) <$> flatten' e1 <*> flatten' e2
+flatten' (GetChar x e) = GetChar x <$> flatten' e
+flatten' (PutChar x e) = PutChar x <$> flatten' e
+flatten' Stop = return Stop
+
+flattenComp :: (Applicative m, MonadState Int m) => Comp -> (Comp -> m Prog) -> m Prog
+flattenComp (Opr c) k = k (Opr c)
+flattenComp (Add c1 c2) k =
+  flattenComp' c1 $ \c1' ->
+  flattenComp' c2 $ \c2' ->
+  k (Add c1' c2')
+flattenComp (Mul c1 c2) k =
+  flattenComp' c1 $ \c1' ->
+  flattenComp' c2 $ \c2' ->
+  k (Mul c1' c2')
+
+flattenComp' :: (Applicative m, MonadState Int m) => Comp -> (Comp -> m Prog) -> m Prog
+flattenComp' c@(Opr _) k = k c
+flattenComp' c k = flattenComp c $ \c' -> do
+  n <- get
+  modify (+1)
+  Let n c' <$> k (Opr (Var n))

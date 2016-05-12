@@ -3,6 +3,7 @@ module Simplifier where
 import Control.Monad (guard, mapM)
 import Data.List ((\\), sort)
 
+import Text.PrettyPrint.GenericPretty
 import CoreExpr
 
 {- Try to use finally-tagless some day? -}
@@ -168,8 +169,8 @@ trivloop (While x (x1, x2) e1 e2) = trySimplify $ do
   acts <- simpleActs [] e1'
   upd@(Nothing, x, y, c) <- lookup (Opr (Var x1)) acts
   times <- case c of
-    Add (Opr (Var x')) (Opr (Imm (-1))) | x == x' -> return (Opr (Var x))
-    Add (Opr (Imm (-1))) (Opr (Var x')) | x == x' -> return (Opr (Var x))
+    Add (Opr (Var _)) (Opr (Imm (-1))) -> return (Opr (Var x))
+    Add (Opr (Imm (-1))) (Opr (Var _)) -> return (Opr (Var x))
     _ -> Nothing -- can also handle *x += 1 in addition to *x -= 1
   let acts' = filter (/= (Opr (Var x1), upd)) acts
   comps <- mapM (makeComp times) acts'
@@ -178,24 +179,24 @@ trivloop (While x (x1, x2) e1 e2) = trySimplify $ do
   makeComp times (Opr op, (Nothing, x, y, Add (Opr (Var x')) c'))
     | x == x' = Just $
       Load x op .
-      Let y (Mul times c') .
+      Let y (Add (Opr (Var x)) (Mul times c')) .
       Store op (Var y)
   makeComp times (Opr op, (Nothing, x, y, Add c' (Opr (Var x'))))
     | x == x' = Just $
       Load x op .
-      Let y (Mul times c') .
+      Let y (Add (Opr (Var x)) (Mul times c')) .
       Store op (Var y)
   makeComp times (c, (Just op, x, y, Add (Opr (Var x')) c'))
     | x == x' = Just $
       Let op c .
       Load x (Var op) .
-      Let y (Mul times c') .
+      Let y (Add (Opr (Var x)) (Mul times c')) .
       Store (Var op) (Var y)
   makeComp times (c, (Just op, x, y, Add c' (Opr (Var x'))))
     | x == x' = Just $
       Let op c .
       Load x (Var op) .
-      Let y (Mul times c') .
+      Let y (Add (Opr (Var x)) (Mul times c')) .
       Store (Var op) (Var y)
   trySimplify (Just simp) = simp e2'
   trySimplify Nothing = While x (x1, x2) e1' e2'
