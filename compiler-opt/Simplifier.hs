@@ -229,6 +229,24 @@ simpleActs vars
 simpleActs vars Stop = Just []
 simpleActs vars _ = Nothing
 
+commons (Let x c e) = Let x c (commons (csubst e (Var x) c))
+commons (Load x op e) = Load x op (commons e)
+commons (Store x op e) = Store x op (commons e)
+commons (While x (x1, x2) e1 e2) = While x (x1, x2) (commons e1) (commons e2)
+commons (GetChar x e) = GetChar x (commons e)
+commons (PutChar x e) = PutChar x (commons e)
+commons Stop = Stop
+
+csubst (Let y c' e) x c
+  | c == c' = Let y c' (csubst (psubst e (Opr x) y) x c)
+  | otherwise = Let y c' (csubst e x c)
+csubst (Load y op e) x c = Load y op (csubst e x c)
+csubst (Store y op e) x c = Store y op (csubst e x c)
+csubst (While y (x1, x2) e1 e2) x c = While y (x1, x2) (csubst e1 x c) (csubst e2 x c)
+csubst (GetChar y e) x c = GetChar y (csubst e x c)
+csubst (PutChar y e) x c = PutChar y (csubst e x c)
+csubst Stop x c = Stop
+
 -- e1 [ e2 / x ] is written as psubst e1 e2 x
 psubst :: Prog -> Comp -> Int -> Prog
 psubst (Let y c e1) e2 x = Let y (psubstComp c e2 x) (psubst e1 e2 x)
