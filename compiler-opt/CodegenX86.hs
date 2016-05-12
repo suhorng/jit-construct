@@ -27,6 +27,7 @@ type VX86 = [VX86Inst]
 
 foldrOp f g e [] = e
 foldrOp f g e (LetAdd x y z:es) = f x (f y (f z (foldrOp f g e es)))
+foldrOp f g e (LetMul x y z:es) = f x (f y (f z (foldrOp f g e es)))
 foldrOp f g e (Let x y:es) = f x (f y (foldrOp f g e es))
 foldrOp f g e (While x (x1, x2) es xs:es') = f x (f x1 (f x2 (g (foldrOp f g e es) (foldr (\(a1, a2) b -> f a1 (f a2 b)) (foldrOp f g e es') xs))))
 foldrOp f g e (GetChar x:es) = f x (foldrOp f g e es)
@@ -38,6 +39,7 @@ foldrOp f g e (LOOPNZ lbl x es:es') = f x (g (foldrOp f g e es) (foldrOp f g e e
 
 data VX86Inst =
     LetAdd VX86Op VX86Op VX86Op
+  | LetMul VX86Op VX86Op VX86Op
   | Let VX86Op VX86Op
   | While VX86Op (VX86Op, VX86Op) VX86 [(VX86Op, VX86Op)]
   | GetChar VX86Op
@@ -46,6 +48,7 @@ data VX86Inst =
   | Call String VX86Op
   | LEA VX86Op VX86Op
   | ADD VX86Op VX86Op
+  | MUL VX86Op VX86Op VX86Op
   | MOV VX86Op VX86Op
   | LOOPNZ Int VX86Op VX86
   deriving (Eq, Show, Generic)
@@ -67,7 +70,7 @@ isReg _ = False
 
 injVX86 :: E.Prog -> VX86
 injVX86 (E.Let x (E.Add (E.Opr y) (E.Opr z)) e) = LetAdd (Var x) (injOp y) (injOp z):injVX86 e
-injVX86 (E.Let x (E.Mul (E.Opr y) (E.Opr z)) e) = error "injVX86: Let Mul"
+injVX86 (E.Let x (E.Mul (E.Opr y) (E.Opr z)) e) = LetMul (Var x) (injOp y) (injOp z):injVX86 e
 injVX86 (E.Let x c e) = error ("injVX86: Non-flatten: " ++ show c)
 injVX86 (E.Load x op e) = Let (Var x) (Mem (injOp op)):injVX86 e
 injVX86 (E.Store x op e) = MOV (Mem (injOp x)) (injOp op):injVX86 e
@@ -107,6 +110,7 @@ born op = do
 
 doExtend [] = return []
 doExtend (LetAdd x y z:es) = (LetAdd x y z:) `liftM` (born x >> doExtend es)
+doExtend (LetMul x y z:es) = (LetMul x y z:) `liftM` (born x >> doExtend es)
 doExtend (Let x y:es) = (Let x y:) `liftM` (born x >> doExtend es)
 doExtend (While x (x1, x2) es xs:es') = do
   when (x1 /= x2) (born x)
@@ -152,6 +156,10 @@ doInsert (LetAdd x y z:es) = do
   es' <- killVar y =<< killVar z =<< doInsert es
   defined x
   return (LetAdd x y z:es')
+doInsert (LetMul x y z:es) = do
+  es' <- killVar y =<< killVar z =<< doInsert es
+  defined x
+  return (LetMul x y z:es')
 doInsert (Let x y:es) = do
   es' <- killVar y =<< doInsert es
   defined x
@@ -191,6 +199,7 @@ modifyActiveVar f = modify $ \st -> st { activeVar = f (activeVar st) }
 
 useSeq [] = []
 useSeq (LetAdd x y z:es) = y:z:useSeq es
+useSeq (LetMul x y z:es) = y:z:useSeq es
 useSeq (Let x y:es) = y:useSeq es
 useSeq (While x (x1, x2) es []:es')
   | x1 == x2 = (x1:useSeq es) ++ (x2:useSeq es')
@@ -305,6 +314,13 @@ doLimit es0@(LetAdd x y z:es) = do
   p3 <- create x es0
   es' <- spills [x,y,z] (doLimit es)
   return $ p1 ++ p2 ++ p3 ++ (LetAdd x y' z':p4) ++ es'
+doLimit es0@(LetMul x y z:es) = do
+  (y', p1) <- activate y es0
+  (z', p2) <- activate z es0
+  p4 <- kills es
+  p3 <- create x es0
+  es' <- spills [x,y,z] (doLimit es)
+  return $ p1 ++ p2 ++ p3 ++ (LetMul x y' z':p4) ++ es'
 doLimit es0@(Let x y:es) = do
   st <- get
   (y', p1) <- activate y es0
@@ -372,6 +388,7 @@ collapse es = doRename es where
 
   doRename [] = []
   doRename (LetAdd x y z:es) = LetAdd (renamed x) (renamed y) (renamed z):doRename es
+  doRename (LetMul x y z:es) = LetMul (renamed x) (renamed y) (renamed z):doRename es
   doRename (Let x y:es) = Let (renamed x) (renamed y):doRename es
   doRename (While x (x1, x2) es xs:es') =
     While (if x1 == x2 then x else renamed x) (renamed x1, renamed x2)
@@ -420,6 +437,10 @@ doCollapse hints (LetAdd x y z:es) = do
   es' <- releases es
   allocate (y:z:hints) x
   doCollapse [] es'
+doCollapse hints (LetMul x y z:es) = do
+  es' <- releases es
+  allocate (y:z:hints) x
+  doCollapse [] es'
 doCollapse hints (Let x y:es) = do
   es' <- releases es
   allocate (y:hints) x
@@ -431,6 +452,7 @@ doCollapse hints (While x (x1, x2) es xs:es') = do
   modify $ \world' -> world' { freeRegs = freeRegs world }
   let x2Defined [] = False
       x2Defined (LetAdd op _ _:es) = op == x2 || x2Defined es
+      x2Defined (LetMul op _ _:es) = op == x2 || x2Defined es
       x2Defined (Let op _:es) = op == x2 || x2Defined es
       x2Defined (While op _ _ _:es) = op == x2 || x2Defined es
       x2Defined (_:es) = x2Defined es
@@ -482,6 +504,7 @@ doGenCode (LetAdd dst src1 src2:es)
   | dst == src1 = (ADD dst src2:) `liftM` doGenCode es
   | dst == src2 = (ADD dst src1:) `liftM` doGenCode es
   | otherwise = (LEA dst (Indir "" src1 src2):) `liftM` doGenCode es
+doGenCode (LetMul dst src1 src2:es) = (MUL dst src2 src1:) `liftM` doGenCode es
 doGenCode (Let dst src:es) = (MOV dst src:) `liftM` doGenCode es
 doGenCode (While x (x1, x2) es xs:es') | x1 /= x2 || isReg x = do
   lbl <- freshLabel
@@ -575,6 +598,8 @@ doPrint (LEA dst src:es) =
   "\tlea   " ++ printOp dst ++ ", " ++ printOp src ++ "\n" ++ doPrint es
 doPrint (ADD dst src:es) =
   "\tadd   " ++ printOp dst ++ ", " ++ printOp src ++ "\n" ++ doPrint es
+doPrint (MUL dst src1 src2:es) =
+  "\timul  " ++ printOp dst ++ ", " ++ printOp src1 ++ ", " ++ printOp src2 ++ "\n" ++ doPrint es
 doPrint (MOV dst src@(Mem _):es) =
   "\tmovsx " ++ printOp dst ++ ", " ++ printOp src ++ "\n" ++ doPrint es
 doPrint (MOV dst@(Mem _) src:es) =

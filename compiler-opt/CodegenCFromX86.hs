@@ -27,6 +27,7 @@ genCCode es =
 
 doGenCCode [] = ""
 doGenCCode (LetAdd x y z:es) = genCOp x ++ " = " ++ genCOp y ++ " + " ++ genCOp z ++ ";\n" ++ doGenCCode es
+doGenCCode (LetMul x y z:es) = genCOp x ++ " = " ++ genCOp y ++ " * " ++ genCOp z ++ ";\n" ++ doGenCCode es
 doGenCCode (Let x y:es) = genCOp x ++ " = " ++ genCOp y ++ ";\n" ++ doGenCCode es
 doGenCCode (While x (x1, x2) es xs:es') | x1 /= x2 || isReg x =
   genCOp x ++ " = " ++ genCOp x1 ++ ";\n" ++
