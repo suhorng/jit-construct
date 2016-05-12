@@ -1,5 +1,8 @@
 module Simplifier where
 
+import Control.Monad (guard, mapM)
+import Data.List ((\\), sort)
+
 import CoreExpr
 
 {- Try to use finally-tagless some day? -}
@@ -32,13 +35,9 @@ peval (GetChar x e) = GetChar x (peval e)
 peval (PutChar x e) = PutChar x (peval e)
 peval Stop = Stop
 
-data PComp = PNomial [([Operand], Int)] !Int
+data PComp = PNomial [([Operand], Int)] !Int deriving (Show)
 
-normalize (Opr x@(Var _)) = PNomial [([x], 1)] 0
-normalize (Opr (Imm m)) = PNomial [] m
-normalize (Add c1 c2) = PNomial (add xs1 xs2) (m1+m2) where
-  PNomial xs1 m1 = normalize c1
-  PNomial xs2 m2 = normalize c2
+nomialAdd (PNomial xs1 m1) (PNomial xs2 m2) = PNomial (add xs1 xs2) (m1+m2) where
   add xs [] = xs
   add [] ys = ys
   add (x@(ps,a):xs) (y@(qs,b):ys)
@@ -46,7 +45,21 @@ normalize (Add c1 c2) = PNomial (add xs1 xs2) (m1+m2) where
     | ps > qs = y:add (x:xs) ys
     | a+b == 0 = add xs ys -- ps == qs
     | otherwise = (ps,a+b):add xs ys -- p == qs
-normalize (Mul c1 c2) = error "normalize: Mul"
+
+normalize (Opr x@(Var _)) = PNomial [([x], 1)] 0
+normalize (Opr (Imm m)) = PNomial [] m
+normalize (Add c1 c2) = nomialAdd (normalize c1) (normalize c2)
+normalize (Mul c1 c2) = foldr nomialAdd zero $ do
+  (x1,c1) <- ([],m1):xs1
+  (x2,c2) <- ([],m2):xs2
+  case (x1 ++ x2, c1*c2) of
+    (_, 0) -> []
+    ([], c) -> return $ PNomial [] (c1*c2)
+    (xs, c) -> return $ PNomial [(sort (x1 ++ x2), c1*c2)] 0
+ where
+  zero = PNomial [] 0
+  PNomial xs1 m1 = normalize c1
+  PNomial xs2 m2 = normalize c2
 
 nomialComp (PNomial [] m) = Opr (Imm m)
 nomialComp (PNomial xs m)
@@ -147,6 +160,76 @@ bindInComp (Mul c1 c2) x = bindInComp c1 x || bindInComp c2 x
 bindInOp (Var y) x = y == x
 bindInOp (Imm _) x = False
 
+trivloop (Let x c e) = Let x c (trivloop e)
+trivloop (Load x op e) = Load x op (trivloop e)
+trivloop (Store x op e) = Store x op (trivloop e)
+trivloop (While x (x1, x2) e1 e2) = trySimplify $ do
+  guard (x1 == x2)
+  acts <- simpleActs [] e1'
+  upd@(Nothing, x, y, c) <- lookup (Opr (Var x1)) acts
+  times <- case c of
+    Add (Opr (Var x')) (Opr (Imm (-1))) | x == x' -> return (Opr (Var x))
+    Add (Opr (Imm (-1))) (Opr (Var x')) | x == x' -> return (Opr (Var x))
+    _ -> Nothing -- can also handle *x += 1 in addition to *x -= 1
+  let acts' = filter (/= (Opr (Var x1), upd)) acts
+  comps <- mapM (makeComp times) acts'
+  return $ Load x (Var x1) . foldr (.) id comps . Store (Var x1) (Imm 0)
+ where
+  makeComp times (Opr op, (Nothing, x, y, Add (Opr (Var x')) c'))
+    | x == x' = Just $
+      Load x op .
+      Let y (Mul times c') .
+      Store op (Var y)
+  makeComp times (Opr op, (Nothing, x, y, Add c' (Opr (Var x'))))
+    | x == x' = Just $
+      Load x op .
+      Let y (Mul times c') .
+      Store op (Var y)
+  makeComp times (c, (Just op, x, y, Add (Opr (Var x')) c'))
+    | x == x' = Just $
+      Let op c .
+      Load x (Var op) .
+      Let y (Mul times c') .
+      Store (Var op) (Var y)
+  makeComp times (c, (Just op, x, y, Add c' (Opr (Var x'))))
+    | x == x' = Just $
+      Let op c .
+      Load x (Var op) .
+      Let y (Mul times c') .
+      Store (Var op) (Var y)
+  trySimplify (Just simp) = simp e2'
+  trySimplify Nothing = While x (x1, x2) e1' e2'
+  e1' = trivloop e1
+  e2' = trivloop e2
+trivloop (GetChar x e) = GetChar x (trivloop e)
+trivloop (PutChar x e) = PutChar x (trivloop e)
+trivloop Stop = Stop
+
+compVars (Opr x@(Var _)) = [x]
+compVars (Opr n@(Imm _)) = []
+compVars (Add c1 c2) = compVars c1 ++ compVars c2
+compVars (Mul c1 c2) = compVars c1 ++ compVars c2
+
+simpleActs vars
+  (Load x op'
+  (Let y c'
+  (Store op'' y' e)))
+  | op' == op'', Var y == y',
+    op' `notElem` vars,
+    all (`notElem` vars) (compVars c') =
+      fmap ((Opr op', (Nothing, x, y, c')):) (simpleActs (Var x:Var y:vars) e)
+simpleActs vars
+  (Let op c
+  (Load x op'
+  (Let y c'
+  (Store op'' y' e))))
+  | Var op == op', op' == op'', Var y == y',
+    all (`notElem` vars) (compVars c),
+    all (`notElem` vars) (compVars c') =
+      fmap ((c, (Just op, x, y, c')):) (simpleActs (Var x:Var y:vars) e)
+simpleActs vars Stop = Just []
+simpleActs vars _ = Nothing
+
 -- e1 [ e2 / x ] is written as psubst e1 e2 x
 psubst :: Prog -> Comp -> Int -> Prog
 psubst (Let y c e1) e2 x = Let y (psubstComp c e2 x) (psubst e1 e2 x)
@@ -172,7 +255,7 @@ psubstComp (Opr op) e2 x
   | Var y <- op, y == x = e2
   | otherwise = Opr op
 psubstComp (Add c1 c2) e2 x = Add (psubstComp c1 e2 x) (psubstComp c2 e2 x)
-psubstComp (Mul c1 c2) e2 x = Add (psubstComp c1 e2 x) (psubstComp c2 e2 x)
+psubstComp (Mul c1 c2) e2 x = Mul (psubstComp c1 e2 x) (psubstComp c2 e2 x)
 
 psubstOp :: Operand -> Comp -> Int -> Operand
 psubstOp (Var y) (Opr (Var z)) x | y == x = Var z

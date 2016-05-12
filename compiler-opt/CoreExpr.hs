@@ -23,7 +23,7 @@ data Prog = Let !Int !Comp !Prog
 data Comp = Opr !Operand
           | Add !Comp !Comp
           | Mul !Comp !Comp
-          deriving (Show, Generic)
+          deriving (Show, Eq, Generic)
 
 data Operand = Var !Int
              | Imm !Int
