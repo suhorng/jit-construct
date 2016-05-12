@@ -15,13 +15,19 @@ import System.IO
 import Text.Printf
 import Text.PrettyPrint.GenericPretty
 
-infixr 1 :::
-infixr 1 ::-
+infixr 2 :::
+infixr 2 ::-
+infixr 1 +++
 
 data Phases a b where
   Void :: Phases a a
   (:::) :: (String, a -> c) -> Phases c b -> Phases a b
   (::-) :: (String, a -> c, c -> IO ()) -> Phases c b -> Phases a b
+
+(+++) :: Phases a b -> Phases b c -> Phases a c
+(p ::: ps) +++ qs = p ::: (ps +++ qs)
+(p ::- ps) +++ qs = p ::- (ps +++ qs)
+Void +++ qs = qs
 
 runPhases :: Phases a b -> a -> IO b
 runPhases Void !a = return a
@@ -36,18 +42,19 @@ runPhases ((name, f, act) ::- xs) !a = do
   act c
   runPhases xs c
 
-phases =
+build =
   ("parse", parse, \bfp -> hPutStrLn stderr $ replicate 13 ' ' ++ "length=" ++ show (length bfp)) ::-
   ("construct", construct 0) :::
+  Void
+
+basicOpts =
   ("peval", peval) :::
   ("memeval", memeval) :::
   ("peval", peval) :::
   ("bindeval", bindeval) :::
-  ("trivloop", trivloop) :::
-  ("peval", peval) :::
-  ("memeval", memeval) :::
-  ("peval", peval) :::
-  ("bindeval", bindeval) :::
+  Void
+
+codeGen =
   ("flatten", flatten) :::
   ("injVX86", injVX86) :::
   ("liveness", insertKill) :::
@@ -55,6 +62,15 @@ phases =
   ("assignment", collapse) :::
   ("genCode", genCode) :::
   ("print", CodegenX86.printCode, putStr) ::-
+  Void
+
+phases =
+  build +++
+  basicOpts +++
+  ("trivloop", trivloop) :::
+  Void +++
+  basicOpts +++
+  codeGen +++
   ("done", id) :::
   Void
 
