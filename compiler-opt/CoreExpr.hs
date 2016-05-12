@@ -67,26 +67,28 @@ construct' (LOOP bs:bs') = do
   ptr' <- fst <$> get
   modify (first (const tmp))
   While tmp (ptr, ptr') expr' <$> construct' bs'
-construct' (op:bs)       = do
+construct' bs@(op:_)     = do
   (ptr, tmp) <- get
   let tmp2 = tmp + 2
   modify . second $ if op == INCP || op == DECP then (+2) else (+4)
+  let (ops, bs') = span (== op) bs
+      cnt = length ops
   case op of
-    INCP -> Let tmp (Add (Opr (Var ptr)) (Opr (Imm 1))) <$>
-            (modify (first (const tmp)) *> construct' bs)
+    INCP -> Let tmp (Add (Opr (Var ptr)) (Opr (Imm cnt))) <$>
+            (modify (first (const tmp)) *> construct' bs')
 
-    DECP -> Let tmp (Add (Opr (Var ptr)) (Opr (Imm (-1)))) <$>
-            (modify (first (const tmp)) *> construct' bs)
+    DECP -> Let tmp (Add (Opr (Var ptr)) (Opr (Imm (-cnt)))) <$>
+            (modify (first (const tmp)) *> construct' bs')
 
     INCM -> Load tmp (Var ptr) .
-            Let tmp2 (Add (Opr (Var tmp)) (Opr (Imm 1))) .
+            Let tmp2 (Add (Opr (Var tmp)) (Opr (Imm cnt))) .
             Store (Var ptr) (Var tmp2) <$>
-            construct' bs
+            construct' bs'
 
     DECM -> Load tmp (Var ptr) .
-            Let tmp2 (Add (Opr (Var tmp)) (Opr (Imm (-1)))) .
+            Let tmp2 (Add (Opr (Var tmp)) (Opr (Imm (-cnt)))) .
             Store (Var ptr) (Var tmp2) <$>
-            construct' bs
+            construct' bs'
 
 flatten :: Prog -> Prog
 flatten p = evalState (flatten' p) (1 + maxProgOp p) where
