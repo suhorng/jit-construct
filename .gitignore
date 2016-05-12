@@ -1,5 +1,8 @@
 *.o
 *.exe
+*.hi
+*.obj
+*.S
 jitcode
 test_stack
 test_vector
