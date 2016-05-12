@@ -1,4 +1,4 @@
-{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE BangPatterns, GADTs, TypeOperators #-}
 
 module Main where
 
@@ -12,43 +12,51 @@ import System.Environment (getArgs)
 import System.CPUTime
 import System.IO
 
+import Text.Printf
 import Text.PrettyPrint.GenericPretty
 
-test_ :: String -> IO ()
-test_ = (print . bindeval . peval . memeval . peval . construct 0 . parse =<<) . readFile
+infixr 1 :::
+infixr 1 ::-
 
-testTime :: String -> IO ()
-testTime fn = do
+data Phases a b where
+  Void :: Phases a a
+  (:::) :: (String, a -> c) -> Phases c b -> Phases a b
+  (::-) :: (String, a -> c, c -> IO ()) -> Phases c b -> Phases a b
+
+runPhases :: Phases a b -> a -> IO b
+runPhases Void !a = return a
+runPhases ((name, f) ::: xs) !a = do
+  hPrintf stderr "%12.3f " . (/ 10^12) . (fromIntegral :: Integer -> Double) =<< getCPUTime
+  hPutStrLn stderr name
+  runPhases xs (f a)
+runPhases ((name, f, act) ::- xs) !a = do
+  hPrintf stderr "%12.3f " . (/ 10^12) . (fromIntegral :: Integer -> Double) =<< getCPUTime
+  hPutStrLn stderr name
+  let !c = f a
+  act c
+  runPhases xs c
+
+phases =
+  ("parse", parse, \bfp -> hPutStrLn stderr $ replicate 13 ' ' ++ "length=" ++ show (length bfp)) ::-
+  ("construct", construct 0) :::
+  ("peval", peval) :::
+  ("memeval", memeval) :::
+  ("peval", peval) :::
+  ("bindeval", bindeval) :::
+  ("injVX86", injVX86) :::
+  ("liveness", insertKill) :::
+  ("spill", limitActiveVars) :::
+  ("assignment", collapse) :::
+  ("genCode", genCode) :::
+  ("print", CodegenX86.printCode, putStr) ::-
+  ("done", id) :::
+  Void
+
+test :: String -> IO ()
+test fn = do
   s <- readFile fn
-  hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " parse"
-  let bfp = parse s
-  hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr (" construct; input length " ++ show (length bfp))
-  let !ir = construct 0 bfp
-  hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " peval"
-  let !ir' = peval ir
-  hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " memeval"
-  let !ir'' = memeval ir'
-  hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " peval"
-  let !ir''' = peval ir''
-  hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " bindeval"
-  let !ir'''' = bindeval ir'''
-  hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " injx86"
-  let !inj = injVX86 ir''''
-  hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " liveness"
-  let !kld = insertKill inj
-  --mapM_ pp kld >> putStrLn "======== ^ kld ========="
-  hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " spill"
-  let !lmd = limitActiveVars kld
-  --mapM_ pp lmd >> putStrLn "======== ^ lmd ========="
-  hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " assignment"
-  let !col = collapse lmd
-  hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " gencode"
-  --mapM_ pp col >> putStrLn "================="
---  putStr $ genCCode lmd
---{-
-  let !asm = genCode col
-  hPutStr stderr . show . (/ 10^12) . fromIntegral =<< getCPUTime; hPutStrLn stderr " print"
-  putStr $ CodegenX86.printCode asm
----}
+  _ <- runPhases phases s
+  return ()
 
-main = getArgs >>= testTime . head
+main = getArgs >>= test . head
+
