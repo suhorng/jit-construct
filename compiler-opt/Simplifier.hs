@@ -176,28 +176,26 @@ trivloop (While x (x1, x2) e1 e2) = trySimplify $ do
   comps <- mapM (makeComp times) acts'
   return $ Load x (Var x1) . foldr (.) id comps . Store (Var x1) (Imm 0)
  where
-  makeComp times (Opr op, (Nothing, x, y, Add (Opr (Var x')) c'))
-    | x == x' = Just $
+  makeComp times (Opr op, (Nothing, x, y, c')) = do
+    c'' <- case c' of
+      Add (Opr (Var x')) c'' | x == x' -> Just c''
+      Add c'' (Opr (Var x')) | x == x' -> Just c''
+      _ -> Nothing
+    return $
       Load x op .
-      Let y (Add (Opr (Var x)) (Mul times c')) .
+      Let y (Add (Opr (Var x)) (Mul times c'')) .
       Store op (Var y)
-  makeComp times (Opr op, (Nothing, x, y, Add c' (Opr (Var x'))))
-    | x == x' = Just $
-      Load x op .
-      Let y (Add (Opr (Var x)) (Mul times c')) .
-      Store op (Var y)
-  makeComp times (c, (Just op, x, y, Add (Opr (Var x')) c'))
-    | x == x' = Just $
+  makeComp times (c, (Just op, x, y, c')) = do
+    c'' <- case c' of
+      Add (Opr (Var x')) c'' | x == x' -> Just c''
+      Add c'' (Opr (Var x')) | x == x' -> Just c''
+      _ -> Nothing
+    return $
       Let op c .
       Load x (Var op) .
-      Let y (Add (Opr (Var x)) (Mul times c')) .
+      Let y (Add (Opr (Var x)) (Mul times c'')) .
       Store (Var op) (Var y)
-  makeComp times (c, (Just op, x, y, Add c' (Opr (Var x'))))
-    | x == x' = Just $
-      Let op c .
-      Load x (Var op) .
-      Let y (Add (Opr (Var x)) (Mul times c')) .
-      Store (Var op) (Var y)
+  makeComp _ _ = Nothing
   trySimplify (Just simp) = simp e2'
   trySimplify Nothing = While x (x1, x2) e1' e2'
   e1' = trivloop e1
