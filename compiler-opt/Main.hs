@@ -43,6 +43,12 @@ phases =
   ("memeval", memeval) :::
   ("peval", peval) :::
   ("bindeval", bindeval) :::
+  ("trivloop", trivloop) :::
+  ("peval", peval) :::
+  ("memeval", memeval) :::
+  ("peval", peval) :::
+  ("bindeval", bindeval) :::
+  ("flatten", flatten) :::
   ("injVX86", injVX86) :::
   ("liveness", insertKill) :::
   ("spill", limitActiveVars) :::
