@@ -80,23 +80,31 @@ nomialComp (PNomial xs m)
   algorithm as in the `mem2reg` pass of LLVM.
 -}
 
-memeval :: Prog -> Prog
-memeval (Let x c e) = Let x c (memeval e)
-memeval (Load x op e) = Load x op (memeval e)
-memeval (Store x op e) = doStoreX (memeval (putGet e x op)) where
+memeval :: Bool -> Prog -> Prog
+memeval skip (Let x c e) = Let x c (memeval skip e)
+memeval skip (Load x op e) = Load x op (memeval skip e)
+memeval skip (Store x op e) = doStoreX (memeval skip (putGet e x op)) where
   doStoreX e =
     case x of
       Var x' | putPut e x' -> e
       _ -> Store x op e
+
+  canSkip (Imm m) (Imm n) | n /= m = True
+  canSkip (Var z) (Var y) | skip && y /= z = True
+  canSkip _ _ = False
 
   putGet :: Prog -> Operand -> Operand -> Prog
   putGet (Let y c e) x v = Let y c (putGet e x v)
   putGet (Load y op e) x v
     | op == x = Let y (Opr v) (putGet e x v)
     | otherwise = Load y op (putGet e x v)
-  putGet e@(Store _ _ _) x v = e
+  putGet e@(Store x' op' e') x v
+    | canSkip x x' = Store x' op' (putGet e' x v)
+    | otherwise = e
   putGet e@(While _ _ _ _) x v = e
-  putGet e@(GetChar _ _) x v = e
+  putGet e@(GetChar x' e') x v
+    | canSkip x (Var x') = GetChar x' (putGet e' x v)
+    | otherwise = e
   putGet (PutChar y e) x v = PutChar y (putGet e x v)
   putGet Stop x v = Stop
 
@@ -113,7 +121,9 @@ memeval (Store x op e) = doStoreX (memeval (putGet e x op)) where
   -}
   putPut :: Prog -> Int -> Bool
   putPut (Let y c e) x = putPut e x
-  putPut (Load y _ _) x = False
+  putPut (Load y _ e) x
+    | canSkip (Var x) (Var y) = putPut e x
+    | otherwise = False
   putPut (Store op _ e) x
     | Var y <- op, y == x = True
     | otherwise = putPut e x
@@ -123,10 +133,10 @@ memeval (Store x op e) = doStoreX (memeval (putGet e x op)) where
     | otherwise = putPut e x
   putPut (PutChar _ _) x = False
   putPut Stop x = False
-memeval (While y xs e1 e2) = While y xs (memeval e1) (memeval e2)
-memeval (GetChar x e) = GetChar x (memeval e)
-memeval (PutChar x e) = PutChar x (memeval e)
-memeval Stop = Stop
+memeval skip (While y xs e1 e2) = While y xs (memeval skip e1) (memeval skip e2)
+memeval skip (GetChar x e) = GetChar x (memeval skip e)
+memeval skip (PutChar x e) = PutChar x (memeval skip e)
+memeval skip Stop = Stop
 
 -- Drop unused bindings
 bindeval :: Prog -> Prog

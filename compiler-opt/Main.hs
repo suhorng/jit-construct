@@ -49,13 +49,12 @@ build =
 
 basicOpts =
   ("peval", peval) :::
-  ("memeval", memeval) :::
+  ("memeval", memeval False) :::
   ("peval", peval) :::
   ("bindeval", bindeval) :::
   Void
 
 codeGen =
-  ("flatten", flatten) :::
   ("injVX86", injVX86) :::
   ("liveness", insertKill) :::
   ("spill", limitActiveVars) :::
@@ -67,9 +66,15 @@ codeGen =
 phases =
   build +++
   basicOpts +++
-  ("trivloop", trivloop) :::
-  Void +++
+  ("trivloop", trivloop) ::: Void +++
   basicOpts +++
+  ("flatten", flatten) ::: Void +++
+  ("commons", commons) ::: Void +++
+  basicOpts +++
+  ("memeval-diff", memeval True) ::: Void +++
+  basicOpts +++
+  ("flatten", flatten) ::: Void +++
+--  ("print", CoreExpr.printCode, putStr) ::-
   codeGen +++
   ("done", id) :::
   Void
