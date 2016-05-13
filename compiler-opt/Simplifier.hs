@@ -92,10 +92,8 @@ memeval (Store x op e) = doStoreX (memeval (putGet e x op)) where
   putGet :: Prog -> Operand -> Operand -> Prog
   putGet (Let y c e) x v = Let y c (putGet e x v)
   putGet (Load y op e) x v
-    | op == x, Var _ <- v = Let y (Add (Opr v) (Opr (Imm 0))) (putGet e x v)
-    | op == x, Imm _ <- v = Let y (Add (Opr v) (Opr (Imm 0))) (putGet e x v)
-    -- note: created unhandled pattern `Imm + Imm` here
-  putGet (Load y op e) x v = Load y op (putGet e x v)
+    | op == x = Let y (Opr v) (putGet e x v)
+    | otherwise = Load y op (putGet e x v)
   putGet e@(Store _ _ _) x v = e
   putGet e@(While _ _ _ _) x v = e
   putGet e@(GetChar _ _) x v = e
