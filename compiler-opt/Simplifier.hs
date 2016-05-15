@@ -19,19 +19,6 @@ peval (While x (x1, x2) e1 e2) = doWhileXs (peval e2) where
   doWhileXs e2'
     | x == x2'  = While x (x1, x1) (psubst e1' (Opr (Var x1)) x) (psubst e2' (Opr (Var x1)) x)
     | otherwise = While x (x1, x2') e1' e2'
-  getBinding (Let y c e) x
-    | y == x, Opr (Var z) <- c = z
-    | otherwise = getBinding e x
-  getBinding (Load y op e) x
-    | y == x = x
-    | otherwise = getBinding e x
-  getBinding (Store _ _ e) x = getBinding e x
-  getBinding (While y (x1, x2) e1 e2) x
-    | y == x = if x1 == x2 then x1 else x
-    | otherwise = getBinding e2 x
-  getBinding (GetChar _ e) x = getBinding e x
-  getBinding (PutChar _ e) x = getBinding e x
-  getBinding Stop x = x
 peval (GetChar x e) = GetChar x (peval e)
 peval (PutChar x e) = PutChar x (peval e)
 peval Stop = Stop
@@ -245,6 +232,22 @@ commons (GetChar x e) = GetChar x (commons e)
 commons (PutChar x e) = PutChar x (commons e)
 commons Stop = Stop
 
+shorten :: Prog -> Prog
+shorten (Let x c e)
+  | Add (Opr (Imm m)) (Opr (Var y)) <- c' = Let x c' (shorten (psubst e (Add (Opr (Imm (-m))) (Opr (Var x))) y))
+  | Opr (Var y) <- c' = Let x c' (shorten (psubst e c' x))
+  | otherwise = Let x c' (shorten e)
+  where c' = nomialComp (normalize c)
+shorten (Load x op e) = Load x op (shorten e)
+shorten (Store x op e) = Store x op (shorten e)
+shorten (While x (x1, x2) e1 e2) = While x (x1, x2') e1' e2' where
+  e1' = shorten e1
+  e2' = shorten e2
+  x2' = getBinding e1' x2
+shorten (GetChar x e) = GetChar x (shorten e)
+shorten (PutChar x e) = PutChar x (shorten e)
+shorten Stop = Stop
+
 csubst (Let y c' e) x c
   | c == c' = Let y c' (csubst (psubst e (Opr x) y) x c)
   | otherwise = Let y c' (csubst e x c)
@@ -254,6 +257,20 @@ csubst (While y (x1, x2) e1 e2) x c = While y (x1, x2) (csubst e1 x c) (csubst e
 csubst (GetChar y e) x c = GetChar y (csubst e x c)
 csubst (PutChar y e) x c = PutChar y (csubst e x c)
 csubst Stop x c = Stop
+
+getBinding (Let y c e) x
+  | y == x, Opr (Var z) <- c = z
+  | otherwise = getBinding e x
+getBinding (Load y op e) x
+  | y == x = x
+  | otherwise = getBinding e x
+getBinding (Store _ _ e) x = getBinding e x
+getBinding (While y (x1, x2) e1 e2) x
+  | y == x = if x1 == x2 then x1 else x
+  | otherwise = getBinding e2 x
+getBinding (GetChar _ e) x = getBinding e x
+getBinding (PutChar _ e) x = getBinding e x
+getBinding Stop x = x
 
 -- e1 [ e2 / x ] is written as psubst e1 e2 x
 psubst :: Prog -> Comp -> Int -> Prog

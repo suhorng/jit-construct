@@ -73,7 +73,9 @@ phases =
   basicOpts +++
   ("memeval-diff", memeval True) ::: Void +++
   basicOpts +++
+  ("shorten", shorten) ::: Void +++
   ("flatten", flatten) ::: Void +++
+  ("bindeval", bindeval) ::: Void +++
 --  ("print", CoreExpr.printCode, putStr) ::-
   codeGen +++
   ("done", id) :::
