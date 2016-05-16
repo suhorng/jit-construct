@@ -44,7 +44,7 @@ runPhases ((name, f, act) ::- xs) !a = do
 
 build =
   ("parse", parse, \bfp -> hPutStrLn stderr $ replicate 13 ' ' ++ "length=" ++ show (length bfp)) ::-
-  ("construct", construct 0) :::
+  ("construct", CoreExpr.Let 0 (CoreExpr.Opr (CoreExpr.Imm 0)) . construct 0) :::
   Void
 
 basicOpts =

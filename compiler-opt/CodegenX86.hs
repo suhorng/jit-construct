@@ -71,6 +71,7 @@ isReg _ = False
 injVX86 :: E.Prog -> VX86
 injVX86 (E.Let x (E.Add (E.Opr y) (E.Opr z)) e) = LetAdd (Var x) (injOp y) (injOp z):injVX86 e
 injVX86 (E.Let x (E.Mul (E.Opr y) (E.Opr z)) e) = LetMul (Var x) (injOp y) (injOp z):injVX86 e
+injVX86 (E.Let x (E.Opr y@(E.Imm _)) e) = Let (Var x) (injOp y):injVX86 e
 injVX86 (E.Let x c e) = error ("injVX86: Non-flatten: " ++ show c)
 injVX86 (E.Load x op e) = Let (Var x) (Mem (injOp op)):injVX86 e
 injVX86 (E.Store x op e) = MOV (Mem (injOp x)) (injOp op):injVX86 e
@@ -304,7 +305,7 @@ limitActiveVars es = getRight . runExcept . (`evalStateT` st0) . (`runReaderT` [
   maxVar (Var n) m = n `max` m
   maxVar (Mem op) m = maxVar op m
   maxVar _ m = m
-  actives = [(Var 0, Var 0)]
+  actives = []
 
 doLimit es0@[] = return []
 doLimit es0@(LetAdd x y z:es) = do
@@ -376,9 +377,8 @@ modifyFreeRegs f = modify $ \st -> st { freeRegs = f (freeRegs st) }
 modifyVarAlloc f = modify $ \st -> st { varAlloc = f (varAlloc st) }
 
 collapse es = doRename es where
-  StReg rs als = execState (doCollapse [] es) (StReg rs0 [(Var 0, rx0)])
-  rs0 = map Reg [0..3] \\ [rx0]
-  rx0 = Reg 1
+  StReg rs als = execState (doCollapse [] es) (StReg rs0 [])
+  rs0 = map Reg [0..3]
 
   renamed (Mem op) = Mem (renamed op)
   renamed op@(Var _)
@@ -535,8 +535,9 @@ printOp0 regs (Indir s op1 op2) =
             (if op2 /= Imm 0 then " + " ++ printOp0 regs op2 else "") ++
         "]"
 printOp0 regs (Local n) = printOp0 regs (Indir "dword" (Reg 6) (Imm (n*4)))
-printOp0 regs (Mem op@(Reg m)) | m < activeVarLimit = printOp0 regs (Indir "byte" op (Imm 0))
-printOp0 regs op = error "genOp: " ++ show op
+printOp0 regs (Mem op@(Reg m)) | m < activeVarLimit = printOp0 regs (Indir "byte" (Reg 4) op)
+printOp0 regs (Mem op@(Imm n)) = printOp0 regs (Indir "byte" (Reg 4) op)
+printOp0 regs op = error ("printOp0: " ++ show op)
 
 printOp = printOp0 regs
 
@@ -554,7 +555,7 @@ printCode es = pre ++ doPrint es ++ post where
                 , "\tpush  ecx\n"
                 , "\tpush  edx\n"
                 , "\tmov   eax, [ebp + 8]\n"
-                , "\tmovzx edx, byte [eax]\n"
+                , "\tmovzx edx, byte [eax + esi]\n"
                 , "\tpush  edx\n"
                 , "\tcall  _putchar\n"
                 , "\tadd   esp, 4\n"
@@ -571,7 +572,7 @@ printCode es = pre ++ doPrint es ++ post where
                 , "\tpush  edx\n"
                 , "\tcall  _getchar\n"
                 , "\tmov   edx, [ebp + 8]\n"
-                , "\tmov   [edx], al\n"
+                , "\tmov   [edx + esi], al\n"
                 , "\tpop   edx\n"
                 , "\tpop   ecx\n"
                 , "\tpop   eax\n"
@@ -581,10 +582,13 @@ printCode es = pre ++ doPrint es ++ post where
                 , "\tpush  ebp\n"
                 , "\tmov   ebp, esp\n"
                 , "\tpush  ebx\n"
+                , "\tpush  esi\n"
                 , "\tpush  edi\n"
-                , "\tmov   ebx, [ebp + 8]\n"
+                , "\txor   ebx, ebx\n"
+                , "\tmov   esi, [ebp + 8]\n"
                 , "\tmov   edi, [ebp + 12]\n" ]
   post = concat [ "\tpop   edi\n"
+                , "\tpop   esi\n"
                 , "\tpop   ebx\n"
                 , "\tleave\n"
                 , "\tret\n" ]
